@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.megabyte0x.nym-vpn",
+  "name": "NymVPN",
+  "version": "1.0.0",
+  "author": "megabyte0x",
+  "license": "MIT",
+  "description": "Control NymVPN from the Omarchy bar: live tunnel status, one-click connect/disconnect, 5-hop mixnet vs 2-hop WireGuard mode, and entry/exit country selection via the nym-vpnc CLI.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "NymVPN",
+    "description": "NymVPN tunnel status with a connect/disconnect control panel",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
