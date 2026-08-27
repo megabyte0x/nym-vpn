@@ -44,6 +44,32 @@ function gatewayGetCommand() {
   return sh(CLI + " gateway get 2>&1")
 }
 
+// List the gateways available for a given type so we can offer the user a
+// pick-from-list country selector instead of asking them to type ISO codes.
+// type is one of "mixnet-entry" | "mixnet-exit" | "wg". Rendered as markdown so
+// the Location column ("City [CC]") is easy to scan for country codes.
+function gatewayListCommand(type) {
+  var t = gatewayType(type)
+  return sh(CLI + " gateway list " + t + " --table-style markdown 2>&1")
+}
+
+// Which gateway pool backs the entry / exit hop for the current mode.
+// Fast (2-hop WireGuard) draws both hops from the "wg" pool; Anonymous
+// (5-hop mixnet) uses the dedicated mixnet entry / exit pools.
+function entryGatewayType(twoHop) {
+  return twoHop === true ? "wg" : "mixnet-entry"
+}
+
+function exitGatewayType(twoHop) {
+  return twoHop === true ? "wg" : "mixnet-exit"
+}
+
+function gatewayType(type) {
+  var t = text(type).toLowerCase()
+  if (t === "wg" || t === "mixnet-entry" || t === "mixnet-exit") return t
+  return "mixnet-entry"
+}
+
 function tunnelGetCommand() {
   return sh(CLI + " tunnel get 2>&1")
 }
@@ -120,8 +146,118 @@ function setCountriesCommand(entry, exit) {
   return sh(parts.join(" ") + " 2>&1")
 }
 
+// Build a `gateway set` command for ONE hop (entry or exit) from a selector
+// value chosen in the picker. Value is a 2-letter ISO country code, or one of
+// the special tokens "auto" (let NymVPN choose, excluding your jurisdiction)
+// or "random" (pick any gateway). Returns null for an unrecognised value.
+function setGatewayCommand(role, value) {
+  var r = text(role).toLowerCase()
+  if (r !== "entry" && r !== "exit") return null
+  var v = text(value)
+  var flag
+  if (v.toLowerCase() === "auto") {
+    flag = "--" + r + "-auto-exclude-jurisdiction on"
+  } else if (v.toLowerCase() === "random") {
+    flag = "--" + r + "-random"
+  } else if (isCountryCode(v)) {
+    flag = "--" + r + "-country " + v.toUpperCase()
+  } else {
+    return null
+  }
+  return sh(CLI + " gateway set " + flag + " 2>&1")
+}
+
 function isCountryCode(value) {
   return typeof value === "string" && COUNTRY_PATTERN.test(value.trim())
+}
+
+// ---------------------------------------------------------------------------
+// Country helpers (turn bare ISO codes into human-friendly, flagged labels)
+// ---------------------------------------------------------------------------
+
+// ISO 3166-1 alpha-2 -> English short name. Covers the gateway countries
+// NymVPN exposes plus the common remainder; unknown codes fall back to the
+// raw code so the picker never shows a blank row.
+var COUNTRY_NAMES = {
+  AE: "United Arab Emirates", AL: "Albania", AM: "Armenia", AR: "Argentina",
+  AT: "Austria", AU: "Australia", AZ: "Azerbaijan", BA: "Bosnia & Herzegovina",
+  BE: "Belgium", BG: "Bulgaria", BO: "Bolivia", BR: "Brazil", CA: "Canada",
+  CH: "Switzerland", CL: "Chile", CO: "Colombia", CR: "Costa Rica",
+  CY: "Cyprus", CZ: "Czechia", DE: "Germany", DK: "Denmark", EC: "Ecuador",
+  EE: "Estonia", ES: "Spain", FI: "Finland", FR: "France",
+  GB: "United Kingdom", GE: "Georgia", GR: "Greece", HK: "Hong Kong",
+  HR: "Croatia", HU: "Hungary", ID: "Indonesia", IE: "Ireland",
+  IL: "Israel", IN: "India", IS: "Iceland", IT: "Italy", JP: "Japan",
+  KH: "Cambodia", KR: "South Korea", KZ: "Kazakhstan", LT: "Lithuania",
+  LU: "Luxembourg", LV: "Latvia", MA: "Morocco", MX: "Mexico",
+  MY: "Malaysia", NG: "Nigeria", NL: "Netherlands", NO: "Norway",
+  NZ: "New Zealand", PE: "Peru", PL: "Poland", PR: "Puerto Rico",
+  PT: "Portugal", RO: "Romania", RS: "Serbia", RU: "Russia", SE: "Sweden",
+  SG: "Singapore", SI: "Slovenia", SK: "Slovakia", TR: "Turkey",
+  TW: "Taiwan", UA: "Ukraine", US: "United States", VN: "Vietnam",
+  XK: "Kosovo", ZA: "South Africa",
+  // Common remainder (not necessarily offered today, but future-proof).
+  BD: "Bangladesh", BY: "Belarus", CN: "China", EG: "Egypt", KE: "Kenya",
+  LK: "Sri Lanka", MD: "Moldova", ME: "Montenegro", MK: "North Macedonia",
+  NP: "Nepal", PA: "Panama", PH: "Philippines", PK: "Pakistan",
+  PY: "Paraguay", TH: "Thailand", UY: "Uruguay", UZ: "Uzbekistan",
+  VE: "Venezuela"
+}
+
+function countryName(code) {
+  var c = text(code).toUpperCase()
+  if (COUNTRY_NAMES.hasOwnProperty(c)) return COUNTRY_NAMES[c]
+  return c
+}
+
+// Regional-indicator flag emoji for a 2-letter code (e.g. US -> 🇺🇸).
+function countryFlag(code) {
+  var c = text(code).toUpperCase()
+  if (!/^[A-Z]{2}$/.test(c)) return ""
+  var base = 0x1F1E6
+  return String.fromCodePoint(base + (c.charCodeAt(0) - 65)) +
+         String.fromCodePoint(base + (c.charCodeAt(1) - 65))
+}
+
+// Pull the unique set of country codes out of a `gateway list` table. Each
+// Location cell looks like "City [CC]"; we grab every [CC] and de-duplicate.
+// Returns an array of upper-case codes sorted by their friendly country name.
+function parseGatewayCountries(raw) {
+  var body = text(raw)
+  var re = /\[([A-Za-z]{2})\]/g
+  var seen = {}
+  var out = []
+  var m
+  while ((m = re.exec(body)) !== null) {
+    var c = m[1].toUpperCase()
+    if (!seen[c]) { seen[c] = true; out.push(c) }
+  }
+  out.sort(function (a, b) {
+    return countryName(a).localeCompare(countryName(b))
+  })
+  return out
+}
+
+// Build the option list the SearchableDropdown renders for one hop. Leads with
+// the two "smart" choices, then every available country as a flag + name row
+// (the bare code is kept as the searchable description so typing "de" or
+// "germany" both match). codes is the array from parseGatewayCountries.
+function countryOptions(codes) {
+  var opts = [
+    { value: "auto", label: "✨  Auto (recommended)", description: "Let NymVPN choose, excluding your country" },
+    { value: "random", label: "🎲  Random gateway", description: "Pick any available gateway" }
+  ]
+  var list = Array.isArray(codes) ? codes : []
+  for (var i = 0; i < list.length; i++) {
+    var c = text(list[i]).toUpperCase()
+    if (!/^[A-Z]{2}$/.test(c)) continue
+    opts.push({
+      value: c,
+      label: countryFlag(c) + "  " + countryName(c),
+      description: c
+    })
+  }
+  return opts
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +394,34 @@ function parseGateway(raw) {
   }
 }
 
+// Collapse a raw entry/exit point string ("Country(US)", "Location { .. }",
+// "Auto { .. }") into the selector value the picker uses: a 2-letter code, or
+// "auto" when NymVPN is auto-selecting. Returns "" when nothing is set yet.
+function gatewaySelection(pointStr) {
+  var s = text(pointStr)
+  if (s === "") return ""
+  var m = s.match(/\b([A-Z]{2})\b/)
+  if (m && countryName(m[1]) !== m[1]) return m[1]
+  // Fall back: any 2-letter token in parentheses, e.g. Country(xx).
+  var m2 = s.match(/\(([A-Za-z]{2})\)/)
+  if (m2) return m2[1].toUpperCase()
+  if (/auto/i.test(s)) return "auto"
+  return ""
+}
+
+// One-line, human summary of the current route for the section header.
+function gatewaySummary(gateway) {
+  var g = gateway || {}
+  var e = gatewaySelection(g.entry)
+  var x = gatewaySelection(g.exit)
+  function pretty(v) {
+    if (v === "" ) return "Auto"
+    if (v === "auto") return "Auto"
+    return countryFlag(v) + " " + countryName(v)
+  }
+  return pretty(e) + "  \u2192  " + pretty(x)
+}
+
 function matchLine(body, re) {
   var m = String(body).match(re)
   return m ? text(m[1]) : ""
@@ -280,6 +444,9 @@ if (typeof module !== "undefined" && module.exports) {
     statusCommand: statusCommand,
     accountCommand: accountCommand,
     gatewayGetCommand: gatewayGetCommand,
+    gatewayListCommand: gatewayListCommand,
+    entryGatewayType: entryGatewayType,
+    exitGatewayType: exitGatewayType,
     tunnelGetCommand: tunnelGetCommand,
     connectCommand: connectCommand,
     disconnectCommand: disconnectCommand,
@@ -288,7 +455,14 @@ if (typeof module !== "undefined" && module.exports) {
     looksLikeMnemonic: looksLikeMnemonic,
     setTwoHopCommand: setTwoHopCommand,
     setCountriesCommand: setCountriesCommand,
+    setGatewayCommand: setGatewayCommand,
     isCountryCode: isCountryCode,
+    countryName: countryName,
+    countryFlag: countryFlag,
+    parseGatewayCountries: parseGatewayCountries,
+    countryOptions: countryOptions,
+    gatewaySelection: gatewaySelection,
+    gatewaySummary: gatewaySummary,
     parseStatus: parseStatus,
     stateColorRole: stateColorRole,
     stateGlyph: stateGlyph,

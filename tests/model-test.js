@@ -175,4 +175,77 @@ test("modeLabel", () => {
   assert.ok(M.modeLabel(null).toLowerCase().includes("unknown"))
 })
 
+// --- country picker helpers ---
+test("gatewayListCommand picks the right pool and captures stderr", () => {
+  assert.ok(M.gatewayListCommand("wg")[2].includes("gateway list wg"))
+  assert.ok(M.gatewayListCommand("mixnet-entry")[2].includes("gateway list mixnet-entry"))
+  assert.ok(M.gatewayListCommand("mixnet-exit")[2].includes("gateway list mixnet-exit"))
+  // Unknown type falls back to a safe default rather than injecting junk.
+  assert.ok(M.gatewayListCommand("bogus")[2].includes("gateway list mixnet-entry"))
+  assert.ok(M.gatewayListCommand("wg")[2].includes("2>&1"))
+})
+
+test("entry/exit gateway types follow the mode", () => {
+  assert.strictEqual(M.entryGatewayType(true), "wg")
+  assert.strictEqual(M.exitGatewayType(true), "wg")
+  assert.strictEqual(M.entryGatewayType(false), "mixnet-entry")
+  assert.strictEqual(M.exitGatewayType(false), "mixnet-exit")
+})
+
+test("setGatewayCommand handles country / auto / random per hop", () => {
+  assert.ok(M.setGatewayCommand("entry", "us")[2].includes("--entry-country US"))
+  assert.ok(M.setGatewayCommand("exit", "DE")[2].includes("--exit-country DE"))
+  assert.ok(M.setGatewayCommand("entry", "auto")[2].includes("--entry-auto-exclude-jurisdiction on"))
+  assert.ok(M.setGatewayCommand("exit", "random")[2].includes("--exit-random"))
+  assert.strictEqual(M.setGatewayCommand("entry", "nonsense"), null)
+  assert.strictEqual(M.setGatewayCommand("middle", "us"), null)
+})
+
+test("countryName maps codes and falls back to the raw code", () => {
+  assert.strictEqual(M.countryName("us"), "United States")
+  assert.strictEqual(M.countryName("DE"), "Germany")
+  assert.strictEqual(M.countryName("ZZ"), "ZZ")
+})
+
+test("countryFlag builds regional-indicator emoji", () => {
+  assert.strictEqual(M.countryFlag("US"), "\uD83C\uDDFA\uD83C\uDDF8")
+  assert.strictEqual(M.countryFlag("de"), "\uD83C\uDDE9\uD83C\uDDEA")
+  assert.strictEqual(M.countryFlag("1"), "")
+})
+
+test("parseGatewayCountries extracts unique codes sorted by name", () => {
+  const raw = [
+    "| ID | Name | Location |",
+    "| a | x | Dubai [AE] |",
+    "| b | y | Vienna [AT] |",
+    "| c | z | Berlin [DE] |",
+    "| d | w | Munich [DE] |"
+  ].join("\n")
+  const codes = M.parseGatewayCountries(raw)
+  assert.deepStrictEqual(codes, ["AT", "DE", "AE"]) // Austria, Germany, United Arab Emirates
+})
+
+test("countryOptions leads with auto+random then flagged countries", () => {
+  const opts = M.countryOptions(["US", "DE"])
+  assert.strictEqual(opts[0].value, "auto")
+  assert.strictEqual(opts[1].value, "random")
+  assert.strictEqual(opts[2].value, "US")
+  assert.ok(opts[2].label.includes("United States"))
+  assert.strictEqual(opts[2].description, "US") // searchable by bare code
+})
+
+test("gatewaySelection collapses raw points to selector values", () => {
+  assert.strictEqual(M.gatewaySelection("Country(US)"), "US")
+  assert.strictEqual(M.gatewaySelection("Auto { exclude_user_country: true }"), "auto")
+  assert.strictEqual(M.gatewaySelection(""), "")
+})
+
+test("gatewaySummary renders a friendly route line", () => {
+  const s = M.gatewaySummary({ entry: "Country(US)", exit: "Country(DE)" })
+  assert.ok(s.includes("United States"))
+  assert.ok(s.includes("Germany"))
+  assert.ok(s.includes("\u2192"))
+  assert.ok(M.gatewaySummary({ entry: "Auto { }", exit: "Auto { }" }).includes("Auto"))
+})
+
 console.log("\n" + passed + " tests passed")

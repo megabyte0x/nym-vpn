@@ -23,6 +23,15 @@ Panel {
   property bool accountFetched: false
   property var twoHop: null
   property var gateway: ({ entry: "", exit: "" })
+  // Available gateway countries per pool ("mixnet-entry"|"mixnet-exit"|"wg"),
+  // fetched lazily from `nym-vpnc gateway list` and cached so the pickers open
+  // instantly. Shape: { <type>: ["US", "DE", ...] }.
+  property var countryCodes: ({})
+  // Which pool feeds each hop for the current mode.
+  readonly property string entryType: Model.entryGatewayType(root.twoHop)
+  readonly property string exitType: Model.exitGatewayType(root.twoHop)
+  readonly property var entryOptions: Model.countryOptions(root.countryCodes[root.entryType] || [])
+  readonly property var exitOptions: Model.countryOptions(root.countryCodes[root.exitType] || [])
   property string notice: ""
   property bool copied: false
   // Inline login (recovery phrase) state.
@@ -98,6 +107,7 @@ Panel {
   function refreshAll() {
     root.refreshStatus()
     root.refreshConfig()
+    root.refreshCountries()
     if (root.authFree) root.refreshAccount()
   }
 
@@ -161,13 +171,28 @@ Panel {
     if (root.twoHop === twoHopOn) return
     root.runAction(Model.setTwoHopCommand(twoHopOn))
   }
-  function applyCountries() {
-    var command = Model.setCountriesCommand(entryField.text, exitField.text)
-    if (!command) {
-      root.notice = "Enter a 2-letter country code (e.g. US, DE)"
-      return
-    }
+  // Apply a single hop's country selection immediately when the user picks it.
+  function applyGateway(role, value) {
+    var command = Model.setGatewayCommand(role, value)
+    if (!command) return
     root.runAction(command)
+  }
+
+  // Fetch the country list for a gateway pool once and cache it. Safe to call
+  // repeatedly; it no-ops while a fetch is in flight or already cached.
+  function ensureCountries(type) {
+    if (!type) return
+    if (root.countryCodes[type] && root.countryCodes[type].length > 0) return
+    if (listProc.running) return
+    listProc.pendingType = type
+    listProc.command = Model.gatewayListCommand(type)
+    listProc.running = true
+  }
+
+  // Make sure both hops' pools for the current mode are loaded.
+  function refreshCountries() {
+    root.ensureCountries(root.entryType)
+    if (root.exitType !== root.entryType) root.ensureCountries(root.exitType)
   }
 
   // --- Processes -----------------------------------------------------------
@@ -232,7 +257,11 @@ Panel {
       waitForEnd: true
       onStreamFinished: {
         var v = Model.parseTwoHop(String(text || ""))
-        if (v !== null) root.twoHop = v
+        if (v !== null) {
+          root.twoHop = v
+          // Mode determines which gateway pool feeds each hop; load it.
+          root.refreshCountries()
+        }
       }
     }
   }
@@ -242,6 +271,29 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.gateway = Model.parseGateway(String(text || ""))
+    }
+  }
+
+  // Lazy country-list fetch for the pickers. `gateway list` is a config read
+  // (not polkit-gated), so it doesn't add password prompts.
+  Process {
+    id: listProc
+    property string pendingType: ""
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var codes = Model.parseGatewayCountries(String(text || ""))
+        if (listProc.pendingType !== "" && codes.length > 0) {
+          var next = Object.assign({}, root.countryCodes)
+          next[listProc.pendingType] = codes
+          root.countryCodes = next
+        }
+      }
+    }
+    onExited: {
+      listProc.pendingType = ""
+      // If the other hop's pool is still empty, fetch it now.
+      root.refreshCountries()
     }
   }
 
@@ -312,6 +364,10 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      // While a region picker (search field + result list) or the inline login
+      // field owns the keyboard, suspend the panel's own key handling so typing
+      // doesn't leak into shortcuts and Esc closes the popup, not the panel.
+      blocked: entryPicker.popupOpen || exitPicker.popupOpen || root.loggingIn
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(key) { if (key === "r") root.refreshAll() }
@@ -553,73 +609,51 @@ Panel {
           }
         }
 
-        // Entry / exit country selection
+        // Entry / exit region selection. Instead of typing a country code, the
+        // user picks a region from a searchable, flagged list for each hop.
         Column {
           width: parent.width
           spacing: Style.spacing.sm
           visible: root.installed && !root.daemonDown
+          opacity: root.actionBusy ? 0.55 : 1
 
           Text {
-            text: "Gateways" + (root.gateway.entry !== "" || root.gateway.exit !== "" ? "  ·  " + root.gateway.entry + " → " + root.gateway.exit : "")
             width: parent.width
             elide: Text.ElideRight
+            text: "Servers  ·  " + Model.gatewaySummary(root.gateway)
             color: Color.muted
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption
           }
 
-          Row {
+          // Entry (where your traffic enters the network)
+          SearchableDropdown {
+            id: entryPicker
             width: parent.width
-            spacing: Style.spacing.sm
+            label: "Entry region"
+            placeholderText: "Search a country…"
+            emptyText: root.entryOptions.length <= 2 ? "Loading regions…" : "No matches"
+            triggerLabel: "Auto (recommended)"
+            options: root.entryOptions
+            value: Model.gatewaySelection(root.gateway.entry)
+            foreground: root.contentForeground
+            fontFamily: root.contentFontFamily
+            onChanged: function(v) { root.applyGateway("entry", v) }
+          }
 
-            TextField {
-              id: entryField
-              width: (column.width - Style.spacing.sm * 2 - applyBtn.width) / 2
-              placeholderText: "Entry (US)"
-              foreground: root.contentForeground
-              font.family: root.contentFontFamily
-              Keys.onPressed: function(e) {
-                if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) { root.applyCountries(); e.accepted = true }
-              }
-            }
-
-            TextField {
-              id: exitField
-              width: (column.width - Style.spacing.sm * 2 - applyBtn.width) / 2
-              placeholderText: "Exit (DE)"
-              foreground: root.contentForeground
-              font.family: root.contentFontFamily
-              Keys.onPressed: function(e) {
-                if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) { root.applyCountries(); e.accepted = true }
-              }
-            }
-
-            Rectangle {
-              id: applyBtn
-              anchors.verticalCenter: parent.verticalCenter
-              width: applyLabel.implicitWidth + Style.space(16)
-              implicitHeight: applyLabel.implicitHeight + Style.space(12)
-              radius: Style.cornerRadius
-              color: applyMouse.containsMouse ? Style.selectedFill : Style.hoverFill
-              opacity: root.actionBusy ? 0.5 : 1
-
-              Text {
-                id: applyLabel
-                anchors.centerIn: parent
-                text: "Set"
-                color: root.contentForeground
-                font.family: root.contentFontFamily
-                font.pixelSize: Style.font.bodySmall
-              }
-
-              MouseArea {
-                id: applyMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: if (!root.actionBusy) root.applyCountries()
-              }
-            }
+          // Exit (the region your traffic appears to come from)
+          SearchableDropdown {
+            id: exitPicker
+            width: parent.width
+            label: "Exit region"
+            placeholderText: "Search a country…"
+            emptyText: root.exitOptions.length <= 2 ? "Loading regions…" : "No matches"
+            triggerLabel: "Auto (recommended)"
+            options: root.exitOptions
+            value: Model.gatewaySelection(root.gateway.exit)
+            foreground: root.contentForeground
+            fontFamily: root.contentFontFamily
+            onChanged: function(v) { root.applyGateway("exit", v) }
           }
         }
 

@@ -3,8 +3,8 @@
 Control [NymVPN](https://nym.com) from the Omarchy (Quattro) bar. The widget
 shows live tunnel status; clicking it opens a panel to connect/disconnect,
 switch between **Anonymous (5-hop mixnet)** and **Fast (2-hop WireGuard)** mode,
-and pick entry/exit gateway countries — all by driving the official
-`nym-vpnc` command-line client.
+and pick the **entry** and **exit** regions from a searchable, flag-labelled
+country list — all by driving the official `nym-vpnc` command-line client.
 
 ![status glyph in the bar](preview.png)
 
@@ -98,8 +98,14 @@ omarchy plugin add https://github.com/megabyte0x/nym-vpn.git --enable
   **Log in**. The phrase is entered inline (never a full-screen system dialog),
   passed straight to `nym-vpnd` which stores it locally — it never touches the
   clipboard or a log. Use **Log out** to forget the account.
-- In the panel: **Connect** / **Disconnect**, choose **Mode**, and set an
-  **Entry**/**Exit** country (two-letter ISO code, e.g. `US`, `DE`).
+- In the panel: **Connect** / **Disconnect** and choose **Mode**.
+- Pick your **Entry region** and **Exit region** from the two dropdowns. Each
+  opens a searchable list of the countries NymVPN currently has gateways in,
+  shown with a flag and full name — just type to filter (by name or code) and
+  click to select; the choice is applied immediately. Two smart options lead
+  the list: **✨ Auto (recommended)** (let NymVPN choose, excluding your own
+  country) and **🎲 Random gateway**. The available countries follow the
+  active mode (WireGuard gateways for Fast, mixnet gateways for Anonymous).
 - Press **r** to refresh, **Esc** to close.
 
 The bar dot reflects the tunnel state: filled = connected, half = connecting /
