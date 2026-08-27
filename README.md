@@ -66,6 +66,11 @@ omarchy plugin add https://github.com/megabyte0x/nym-vpn.git --enable
 
 - **Left-click** the `nym` widget to open/close the control panel.
 - **Middle-click** to force a status refresh.
+- **Log in** with your NymVPN recovery phrase directly in the panel: click
+  **Log in**, paste your 12–24 word phrase into the masked field, and press
+  **Log in**. The phrase is entered inline (never a full-screen system dialog),
+  passed straight to `nym-vpnd` which stores it locally — it never touches the
+  clipboard or a log. Use **Log out** to forget the account.
 - In the panel: **Connect** / **Disconnect**, choose **Mode**, and set an
   **Entry**/**Exit** country (two-letter ISO code, e.g. `US`, `DE`).
 - Press **r** to refresh, **Esc** to close.

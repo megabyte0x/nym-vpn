@@ -25,6 +25,29 @@ test("connect/disconnect commands", () => {
   assert.ok(M.disconnectCommand()[2].includes("nym-vpnc disconnect"))
 })
 
+test("accountSetCommand is argv (no shell) and never interpolates the phrase", () => {
+  const c = M.accountSetCommand("  word1   word2  word3 ")
+  assert.deepStrictEqual(c, ["nym-vpnc", "account", "set", "word1 word2 word3"])
+  // must NOT be a shell string that could leak the phrase into a log/clipboard
+  assert.notStrictEqual(c[0], "sh")
+})
+
+test("accountForgetCommand", () => {
+  assert.ok(M.accountForgetCommand()[2].includes("account forget"))
+})
+
+test("looksLikeMnemonic validates BIP39 word counts", () => {
+  const w12 = Array(12).fill("abandon").join(" ")
+  const w24 = Array(24).fill("abandon").join(" ")
+  assert.ok(M.looksLikeMnemonic(w12))
+  assert.ok(M.looksLikeMnemonic(w24))
+  assert.ok(M.looksLikeMnemonic("  " + w12 + "  "))
+  assert.ok(!M.looksLikeMnemonic(Array(11).fill("abandon").join(" ")))
+  assert.ok(!M.looksLikeMnemonic(Array(13).fill("abandon").join(" ")))
+  assert.ok(!M.looksLikeMnemonic("abandon abandon 1nvalid " + Array(9).fill("abandon").join(" ")))
+  assert.ok(!M.looksLikeMnemonic(""))
+})
+
 test("setTwoHopCommand toggles on/off", () => {
   assert.ok(M.setTwoHopCommand(true)[2].includes("tunnel set --two-hop on"))
   assert.ok(M.setTwoHopCommand(false)[2].includes("tunnel set --two-hop off"))

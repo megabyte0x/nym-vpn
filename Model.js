@@ -52,6 +52,31 @@ function connectCommand() {
   return sh(CLI + " connect 2>&1")
 }
 
+// Log in with a recovery phrase. Uses an argv array (NOT a shell string) so the
+// mnemonic is never interpolated into a shell command line, clipboard, or log.
+// nym-vpnd stores it locally; it does not leave the machine.
+function accountSetCommand(phrase) {
+  return [CLI, "account", "set", normalizePhrase(phrase)]
+}
+
+function accountForgetCommand() {
+  return sh(CLI + " account forget 2>&1")
+}
+
+function normalizePhrase(phrase) {
+  return text(phrase).replace(/\s+/g, " ")
+}
+
+// A NymVPN recovery phrase is a BIP39 mnemonic: 12/15/18/21/24 lowercase words.
+function looksLikeMnemonic(phrase) {
+  var words = normalizePhrase(phrase).toLowerCase().split(" ").filter(function (w) { return w.length > 0 })
+  if ([12, 15, 18, 21, 24].indexOf(words.length) < 0) return false
+  for (var i = 0; i < words.length; i++) {
+    if (!/^[a-z]+$/.test(words[i])) return false
+  }
+  return true
+}
+
 function disconnectCommand() {
   return sh(CLI + " disconnect 2>&1")
 }
@@ -242,6 +267,9 @@ if (typeof module !== "undefined" && module.exports) {
     tunnelGetCommand: tunnelGetCommand,
     connectCommand: connectCommand,
     disconnectCommand: disconnectCommand,
+    accountSetCommand: accountSetCommand,
+    accountForgetCommand: accountForgetCommand,
+    looksLikeMnemonic: looksLikeMnemonic,
     setTwoHopCommand: setTwoHopCommand,
     setCountriesCommand: setCountriesCommand,
     isCountryCode: isCountryCode,

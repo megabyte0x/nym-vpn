@@ -25,6 +25,14 @@ Panel {
   property var gateway: ({ entry: "", exit: "" })
   property string notice: ""
   property bool copied: false
+  // Inline login (recovery phrase) state.
+  property bool loggingIn: false
+  // True once we've seen the daemon answer without an auth prompt (polkit rule
+  // installed / socket open). Gates auto account fetch and post-action polling
+  // so users WITHOUT the rule are never spammed with prompts.
+  property bool authFree: false
+  readonly property bool loginBusy: loginProc.running
+  readonly property bool loggedIn: accountFetched && account.stored
 
   // The remediation command shown in the setup card, shared by the label and
   // the copy button so they never drift.
@@ -51,7 +59,7 @@ Panel {
   readonly property bool daemonDown: status.state === "daemon-down"
   readonly property bool authRequired: status.state === "auth-required"
   readonly property bool needsSetup: status.state === "not-installed" || status.state === "daemon-down" || status.state === "auth-required"
-  readonly property bool actionBusy: actionProc.running
+  readonly property bool actionBusy: actionProc.running || loginProc.running
 
   function colorForRole(role) {
     if (role === "ok") return Color.accent
@@ -66,6 +74,9 @@ Panel {
   }
 
   function close() {
+    root.loggingIn = false
+    phraseField.text = ""
+    root.watchTicks = 0
     root.controller.hide()
   }
 
@@ -81,12 +92,13 @@ Panel {
   }
 
   // One daemon-touching call (status). Config reads (tunnel/gateway) are not
-  // polkit-gated, so they don't add prompts. We deliberately do NOT auto-fetch
-  // the account here because that is a second gated call (another prompt); it
-  // is fetched lazily via the Account button instead.
+  // polkit-gated, so they don't add prompts. The account is auto-fetched only
+  // once we know the daemon answers without a prompt (authFree) so users
+  // without the polkit rule aren't spammed; otherwise it's fetched on demand.
   function refreshAll() {
     root.refreshStatus()
     root.refreshConfig()
+    if (root.authFree) root.refreshAccount()
   }
 
   function refreshAccount() {
@@ -119,8 +131,32 @@ Panel {
     actionProc.running = true
   }
 
-  function doConnect() { root.runAction(Model.connectCommand()) }
-  function doDisconnect() { root.runAction(Model.disconnectCommand()) }
+  function doConnect() { root.runAction(Model.connectCommand()); root.startWatch() }
+  function doDisconnect() { root.runAction(Model.disconnectCommand()); root.startWatch() }
+
+  // Log in with a recovery phrase entered inline in this panel.
+  function doLogin() {
+    var phrase = phraseField.text
+    if (!Model.looksLikeMnemonic(phrase)) {
+      root.notice = "Enter your 12–24 word recovery phrase"
+      return
+    }
+    if (loginProc.running) return
+    root.notice = ""
+    loginProc.command = Model.accountSetCommand(phrase)
+    loginProc.running = true
+  }
+
+  function doForget() {
+    root.runAction(Model.accountForgetCommand())
+    root.accountFetched = false
+  }
+
+  // Bounded post-action status polling so Connect visibly reaches Connected.
+  // Only runs when authFree (no prompts) to avoid spamming users without the
+  // polkit rule.
+  property int watchTicks: 0
+  function startWatch() { if (root.authFree) root.watchTicks = 8 }
   function setMode(twoHopOn) {
     if (root.twoHop === twoHopOn) return
     root.runAction(Model.setTwoHopCommand(twoHopOn))
@@ -140,11 +176,42 @@ Panel {
     id: statusProc
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.status = Model.parseStatus(String(text || ""), 0)
+      onStreamFinished: {
+        root.status = Model.parseStatus(String(text || ""), 0)
+        // Learn whether the daemon answers without a polkit prompt.
+        if (root.status.state !== "auth-required" && root.status.state !== "unknown" &&
+            root.status.state !== "not-installed") {
+          if (!root.authFree) {
+            root.authFree = true
+            if (root.opened && !root.accountFetched) root.refreshAccount()
+          }
+        } else if (root.status.state === "auth-required") {
+          root.authFree = false
+        }
+      }
     }
     onExited: function(code) {
       if (code !== 0 && root.status && root.status.state === "unknown")
         root.status = Model.parseStatus("", code)
+    }
+  }
+
+  Process {
+    id: loginProc
+    stdout: StdioCollector { id: loginOut; waitForEnd: true }
+    stderr: StdioCollector { id: loginErr; waitForEnd: true }
+    onExited: function(code) {
+      var out = (String(loginOut.text || "") + "\n" + String(loginErr.text || "")).trim()
+      var last = out.split("\n").filter(function(l){ return l.trim() !== "" }).slice(-1)[0] || ""
+      if (code === 0) {
+        root.notice = last !== "" ? last : "Account set. Welcome to NymVPN!"
+        phraseField.text = ""
+        root.loggingIn = false
+        root.accountFetched = false
+        settleTimer.restart()
+      } else {
+        root.notice = last !== "" ? last : "Login failed"
+      }
     }
   }
 
@@ -205,12 +272,29 @@ Panel {
     onTriggered: {
       root.refreshStatus()
       root.refreshConfig()
+      if (root.authFree) root.refreshAccount()
     }
   }
 
-  // No repeating poll timer: each status call pops a polkit password prompt, so
-  // we only refresh on explicit user action (open, r, or after connect/
-  // disconnect via settleTimer).
+  // Bounded post-action polling: only active for a few ticks after Connect/
+  // Disconnect, and only when authFree (no prompts). Stops early on a terminal
+  // state. Users without the polkit rule never poll (watchTicks stays 0).
+  Timer {
+    id: watchTimer
+    interval: 2500
+    repeat: true
+    running: root.opened && root.authFree && root.watchTicks > 0
+    onTriggered: {
+      root.watchTicks -= 1
+      root.refreshStatus()
+      var s = root.status.state
+      if (s === "connected" || s === "disconnected" || s === "error")
+        root.watchTicks = 0
+    }
+  }
+
+  // No always-on poll timer: without the polkit rule each status call prompts,
+  // so we refresh only on explicit action (open, r, connect/disconnect).
   onOpenedChanged: if (root.opened) root.refreshConfig()
 
   // --- UI ------------------------------------------------------------------
@@ -221,7 +305,7 @@ Panel {
     owner: root.barIdentity
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: root.loggingIn ? phraseField : keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(320))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
 
@@ -541,28 +625,148 @@ Panel {
 
         PanelSeparator { visible: root.installed && !root.daemonDown }
 
-        // Account + mode summary line. Account is fetched lazily (its own polkit
-        // prompt), so it stays "tap to check" until requested.
-        Text {
+        // Account + Login. The recovery phrase is entered INLINE here (masked),
+        // never in a screen-grabbing system dialog.
+        Column {
           width: parent.width
-          wrapMode: Text.WordWrap
+          spacing: Style.spacing.sm
           visible: root.installed && !root.daemonDown
-          text: {
-            var acct = root.accountFetched
-              ? (root.account.stored ? "Account: " + (root.account.state !== "" ? root.account.state : "active") : "Account: not logged in")
-              : "Account: tap to check"
-            return acct + "  ·  " + Model.modeLabel(root.twoHop)
-          }
-          color: acctMouse.containsMouse ? root.contentForeground : Color.muted
-          font.family: root.contentFontFamily
-          font.pixelSize: Style.font.caption
 
-          MouseArea {
-            id: acctMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.refreshAccount()
+          // Summary row: account state (left) + Log in / Log out action (right)
+          Item {
+            width: parent.width
+            implicitHeight: acctLabel.implicitHeight
+
+            Text {
+              id: acctLabel
+              anchors.left: parent.left
+              anchors.right: acctAction.left
+              anchors.rightMargin: Style.spacing.sm
+              anchors.verticalCenter: parent.verticalCenter
+              elide: Text.ElideRight
+              text: {
+                var acct = root.accountFetched
+                  ? (root.account.stored ? "Account: " + (root.account.state !== "" ? root.account.state : "active") : "Account: not logged in")
+                  : "Account: tap to check"
+                return acct + "  ·  " + Model.modeLabel(root.twoHop)
+              }
+              color: acctMouse.containsMouse ? root.contentForeground : Color.muted
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+
+              MouseArea {
+                id: acctMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.refreshAccount()
+              }
+            }
+
+            Text {
+              id: acctAction
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.loggedIn ? "Log out" : (root.loggingIn ? "Cancel" : "Log in")
+              color: acctActionMouse.containsMouse ? root.contentForeground : Color.accent
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+
+              MouseArea {
+                id: acctActionMouse
+                anchors.fill: parent
+                anchors.margins: -Style.space(6)
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  if (root.loggedIn) root.doForget()
+                  else root.loggingIn = !root.loggingIn
+                }
+              }
+            }
+          }
+
+          // Inline recovery-phrase entry (masked). Focus stays in this panel.
+          Column {
+            width: parent.width
+            spacing: Style.spacing.sm
+            visible: root.loggingIn && !root.loggedIn
+
+            TextField {
+              id: phraseField
+              width: parent.width
+              password: true
+              placeholderText: "12–24 word recovery phrase"
+              foreground: root.contentForeground
+              font.family: root.contentFontFamily
+              onAccepted: root.doLogin()
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.spacing.sm
+
+              Rectangle {
+                width: (parent.width - Style.spacing.sm) / 2
+                implicitHeight: loginLabel.implicitHeight + Style.space(14)
+                radius: Style.cornerRadius
+                readonly property bool enabled: !root.loginBusy && Model.looksLikeMnemonic(phraseField.text)
+                color: loginMouse.containsMouse && enabled ? Style.selectedFill : Style.hoverFill
+                opacity: enabled ? 1 : 0.45
+
+                Text {
+                  id: loginLabel
+                  anchors.centerIn: parent
+                  text: root.loginBusy ? "Logging in…" : "Log in"
+                  color: Color.accent
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.body
+                  font.bold: true
+                }
+
+                MouseArea {
+                  id: loginMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: parent.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                  onClicked: if (parent.enabled) root.doLogin()
+                }
+              }
+
+              Rectangle {
+                width: (parent.width - Style.spacing.sm) / 2
+                implicitHeight: cancelLabel.implicitHeight + Style.space(14)
+                radius: Style.cornerRadius
+                color: cancelMouse.containsMouse ? Style.selectedFill : Style.hoverFill
+
+                Text {
+                  id: cancelLabel
+                  anchors.centerIn: parent
+                  text: "Cancel"
+                  color: root.contentForeground
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.body
+                }
+
+                MouseArea {
+                  id: cancelMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: { phraseField.text = ""; root.loggingIn = false }
+                }
+              }
+            }
+
+            Text {
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: "Entered here and passed straight to nym-vpnd, which stores it locally. It never leaves your machine or touches the clipboard."
+              color: Color.muted
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+            }
           }
         }
 
@@ -581,7 +785,7 @@ Panel {
         Text {
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
-          text: "Each action may prompt for your password · r to refresh · Esc to close"
+          text: "r to refresh · Esc to close"
           color: Color.muted
           font.family: root.contentFontFamily
           font.pixelSize: Style.font.caption
