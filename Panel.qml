@@ -20,6 +20,7 @@ Panel {
   // Live state, parsed from the CLI.
   property var status: Model.parseStatus("", 0)
   property var account: ({ stored: false, identity: "", state: "", mode: "" })
+  property bool accountFetched: false
   property var twoHop: null
   property var gateway: ({ entry: "", exit: "" })
   property string notice: ""
@@ -28,10 +29,14 @@ Panel {
   // The remediation command shown in the setup card, shared by the label and
   // the copy button so they never drift.
   readonly property string setupCommand: !installed
-    ? "yay -S nym-vpnd-bin nym-vpn-app-bin\nsudo systemctl enable --now nym-vpnd"
+    ? "yay -S nym-vpnc-bin nym-vpnd-bin\nsudo systemctl enable --now nym-vpnd"
     : (daemonDown
        ? "sudo systemctl enable --now nym-vpnd"
-       : "nym-vpnc account set <your recovery phrase>")
+       : (authRequired
+          // Optional: allow the active user to reach the daemon without a
+          // password prompt on every call.
+          ? "sudo tee /etc/polkit-1/rules.d/49-nymvpn.rules >/dev/null <<'EOF'\npolkit.addRule(function(action, subject) {\n  if (action.id == \"com.nymvpn.vpnd.unix-access\" && subject.active && subject.local) {\n    return polkit.Result.YES;\n  }\n});\nEOF"
+          : "nym-vpnc account set <your recovery phrase>"))
 
   // Copy text to the Wayland clipboard via wl-copy, matching the shell's own
   // network/tailscale panels.
@@ -44,7 +49,8 @@ Panel {
 
   readonly property bool installed: status.state !== "not-installed"
   readonly property bool daemonDown: status.state === "daemon-down"
-  readonly property bool needsSetup: status.state === "not-installed" || status.state === "daemon-down" || !account.stored
+  readonly property bool authRequired: status.state === "auth-required"
+  readonly property bool needsSetup: status.state === "not-installed" || status.state === "daemon-down" || status.state === "auth-required"
   readonly property bool actionBusy: actionProc.running
 
   function colorForRole(role) {
@@ -74,8 +80,16 @@ Panel {
     return false
   }
 
+  // One daemon-touching call (status). Config reads (tunnel/gateway) are not
+  // polkit-gated, so they don't add prompts. We deliberately do NOT auto-fetch
+  // the account here because that is a second gated call (another prompt); it
+  // is fetched lazily via the Account button instead.
   function refreshAll() {
     root.refreshStatus()
+    root.refreshConfig()
+  }
+
+  function refreshAccount() {
     if (accountProc.running) return
     accountProc.command = Model.accountCommand()
     accountProc.running = true
@@ -138,7 +152,10 @@ Panel {
     id: accountProc
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.account = Model.parseAccount(String(text || ""))
+      onStreamFinished: {
+        root.account = Model.parseAccount(String(text || ""))
+        root.accountFetched = true
+      }
     }
   }
 
@@ -191,15 +208,9 @@ Panel {
     }
   }
 
-  Timer {
-    interval: Model.POLL_INTERVAL_MS
-    repeat: true
-    running: root.opened
-    triggeredOnStart: false
-    onTriggered: root.refreshStatus()
-  }
-
-  Component.onCompleted: root.refreshConfig()
+  // No repeating poll timer: each status call pops a polkit password prompt, so
+  // we only refresh on explicit user action (open, r, or after connect/
+  // disconnect via settleTimer).
   onOpenedChanged: if (root.opened) root.refreshConfig()
 
   // --- UI ------------------------------------------------------------------
@@ -265,7 +276,7 @@ Panel {
 
         PanelSeparator {}
 
-        // Setup card (missing CLI, daemon down, or no account stored)
+        // Setup card (missing CLI, daemon down, or authentication needed)
         Column {
           width: parent.width
           spacing: Style.spacing.sm
@@ -275,11 +286,11 @@ Panel {
             width: parent.width
             wrapMode: Text.WordWrap
             text: !root.installed
-                  ? "NymVPN CLI not found. Install it, then reopen this panel."
+                  ? "NymVPN CLI (nym-vpnc) not found. The daemon/GUI packages don't include it — install the CLI package, then reopen this panel."
                   : (root.daemonDown
                      ? "The nym-vpnd daemon is not running."
-                     : "No account stored. Log in with your recovery phrase.")
-            color: Color.urgent
+                     : "nym-vpnd asks for your password on every action (polkit). Approve the prompt to continue — or install the optional rule below to allow the active user without repeated prompts.")
+            color: root.authRequired ? root.contentForeground : Color.urgent
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.bodySmall
           }
@@ -328,8 +339,8 @@ Panel {
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            visible: root.installed && !root.daemonDown && !root.account.stored
-            text: "Click the command above to copy it, then run it in a terminal (never paste your recovery phrase here) and press r to refresh."
+            visible: root.authRequired
+            text: "Click the command above to copy it, run it once in a terminal, then log out/in (or restart the polkit agent) and press r. This lets the active local user reach the daemon without a password prompt every time."
             color: Color.muted
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption
@@ -530,16 +541,29 @@ Panel {
 
         PanelSeparator { visible: root.installed && !root.daemonDown }
 
-        // Account + mode summary line
+        // Account + mode summary line. Account is fetched lazily (its own polkit
+        // prompt), so it stays "tap to check" until requested.
         Text {
           width: parent.width
           wrapMode: Text.WordWrap
           visible: root.installed && !root.daemonDown
-          text: (root.account.stored ? "Account: " + (root.account.state !== "" ? root.account.state : "active") : "Account: not logged in")
-                + "  ·  " + Model.modeLabel(root.twoHop)
-          color: Color.muted
+          text: {
+            var acct = root.accountFetched
+              ? (root.account.stored ? "Account: " + (root.account.state !== "" ? root.account.state : "active") : "Account: not logged in")
+              : "Account: tap to check"
+            return acct + "  ·  " + Model.modeLabel(root.twoHop)
+          }
+          color: acctMouse.containsMouse ? root.contentForeground : Color.muted
           font.family: root.contentFontFamily
           font.pixelSize: Style.font.caption
+
+          MouseArea {
+            id: acctMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.refreshAccount()
+          }
         }
 
         // Notice / last command output
@@ -557,7 +581,7 @@ Panel {
         Text {
           width: parent.width
           horizontalAlignment: Text.AlignHCenter
-          text: "Press r to refresh · Esc to close"
+          text: "Each action may prompt for your password · r to refresh · Esc to close"
           color: Color.muted
           font.family: root.contentFontFamily
           font.pixelSize: Style.font.caption

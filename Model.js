@@ -1,6 +1,12 @@
 // NymVPN plugin model: pure helpers for building nym-vpnc commands and
 // parsing their output. No Qt/Quickshell imports here so the same logic can be
 // unit-tested under Node (see tests/model-test.js).
+//
+// IMPORTANT: nym-vpnd gates every RPC connection behind a polkit policy
+// (com.nymvpn.vpnd.unix-access, allow_active = auth_self, no caching), so each
+// `nym-vpnc status/connect/disconnect/account` call pops a password prompt.
+// The plugin therefore NEVER polls on a timer -- it only touches the daemon on
+// explicit user action to keep authentication prompts to a minimum.
 
 var CLI = "nym-vpnc"
 
@@ -98,6 +104,14 @@ function parseStatus(raw, exitCode) {
     return status("not-installed", "Not installed", "nym-vpnc is not on PATH")
   }
 
+  // Daemon is up but the polkit prompt was dismissed / not authenticated.
+  if (lower.indexOf("authentication is required") >= 0 ||
+      lower.indexOf("authenticationrequired") >= 0 ||
+      lower.indexOf("not authorized") >= 0 ||
+      lower.indexOf("permission denied") >= 0) {
+    return status("auth-required", "Authentication needed", "approve the system password prompt")
+  }
+
   // Daemon / RPC transport problems (nym-vpnd not running or not reachable).
   if (lower.indexOf("connection refused") >= 0 ||
       lower.indexOf("no such file or directory") >= 0 ||
@@ -137,7 +151,8 @@ function status(state, label, detail) {
     connected: state === "connected",
     busy: state === "connecting" || state === "disconnecting",
     actionable: state === "connected" || state === "disconnected" ||
-                state === "offline" || state === "error" || state === "unknown"
+                state === "offline" || state === "error" || state === "unknown",
+    authRequired: state === "auth-required"
   }
 }
 
@@ -150,6 +165,7 @@ function stateColorRole(state) {
     case "error":
     case "daemon-down":
     case "not-installed": return "bad"
+    case "auth-required": return "busy"
     default: return "idle"
   }
 }
@@ -163,6 +179,7 @@ function stateGlyph(state) {
     case "error":
     case "daemon-down":
     case "not-installed": return "\u25CB"   // ○ hollow
+    case "auth-required": return "\u25D1"    // ◑ locked/needs action
     default: return "\u25CB"                 // ○ hollow
   }
 }

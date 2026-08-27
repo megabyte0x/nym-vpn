@@ -81,6 +81,13 @@ test("parseStatus detects daemon down", () => {
   assert.strictEqual(s.state, "daemon-down")
 })
 
+test("parseStatus detects authentication required (not daemon-down)", () => {
+  const raw = "Error: Failed to create RPC client\n\nCaused by:\n    Authentication is required to access the daemon"
+  const s = M.parseStatus(raw, 1)
+  assert.strictEqual(s.state, "auth-required")
+  assert.strictEqual(s.authRequired, true)
+})
+
 test("parseStatus empty non-zero exit -> daemon-down", () => {
   assert.strictEqual(M.parseStatus("", 1).state, "daemon-down")
 })
@@ -91,6 +98,7 @@ test("stateColorRole mapping", () => {
   assert.strictEqual(M.stateColorRole("connecting"), "busy")
   assert.strictEqual(M.stateColorRole("error"), "bad")
   assert.strictEqual(M.stateColorRole("daemon-down"), "bad")
+  assert.strictEqual(M.stateColorRole("auth-required"), "busy")
   assert.strictEqual(M.stateColorRole("disconnected"), "idle")
 })
 

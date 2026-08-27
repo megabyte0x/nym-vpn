@@ -13,17 +13,44 @@ and pick entry/exit gateway countries — all by driving the official
 This plugin is a front-end for the NymVPN CLI. Install the NymVPN client and a
 subscription/account first — see <https://nym.com/download/linux>.
 
-On Arch / Omarchy:
+On Arch / Omarchy — the daemon and GUI packages do **not** include the
+`nym-vpnc` CLI, so install the CLI package (`nym-vpnc-bin`) explicitly:
 
 ```sh
-yay -S nym-vpnd-bin nym-vpn-app-bin
-sudo systemctl enable --now nym-vpnd     # start the privileged daemon
+yay -S nym-vpnc-bin nym-vpnd-bin           # CLI + daemon (nym-vpn-app-bin is the optional GUI)
+sudo systemctl enable --now nym-vpnd       # start the privileged daemon
 nym-vpnc account set <your recovery phrase>   # log in (run in a terminal)
 ```
 
 The `nym-vpnd` daemon must be running for `nym-vpnc` to work. If the CLI or the
 daemon is missing, the panel shows a setup card with the exact commands to run —
 click the command box (or its **Copy** button) to copy it to the clipboard.
+
+### Authentication prompts (polkit)
+
+Recent `nym-vpnd` builds gate every daemon call behind a polkit action
+(`com.nymvpn.vpnd.unix-access`, `allow_active = auth_self`), so **each**
+`status` / `connect` / `disconnect` asks for your password. Because of this the
+plugin **never polls in the background** — it only talks to the daemon when you
+open the panel, press `r`, or click Connect/Disconnect, so you get at most one
+prompt per action.
+
+To stop the prompts entirely, allow the active local user without a password by
+installing a polkit rule (the panel offers this command when authentication is
+needed):
+
+```sh
+sudo tee /etc/polkit-1/rules.d/49-nymvpn.rules >/dev/null <<'EOF'
+polkit.addRule(function(action, subject) {
+  if (action.id == "com.nymvpn.vpnd.unix-access" && subject.active && subject.local) {
+    return polkit.Result.YES;
+  }
+});
+EOF
+```
+
+Then log out/in (or restart your polkit agent). This trades a little security for
+convenience; skip it if you prefer to approve each prompt.
 
 > Security: the plugin never asks for your recovery phrase inside the shell.
 > Log in once from a terminal with `nym-vpnc account set`; the plugin only

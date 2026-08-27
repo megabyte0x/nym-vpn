@@ -40,10 +40,10 @@ BarWidget {
     if (panelLoader.item) panelLoader.item.closeForPopoutSwitch()
   }
 
+  // Refresh delegates to the panel so we make exactly ONE daemon call per user
+  // action. The daemon is polkit-gated (a password prompt per call), so we must
+  // never poll on a timer or fan out multiple status calls.
   function refresh() {
-    barStatusProc.running = false
-    barStatusProc.command = Model.statusCommand()
-    barStatusProc.running = true
     if (panelLoader.item) panelLoader.item.refreshAll()
   }
 
@@ -60,33 +60,10 @@ BarWidget {
     return Color.muted
   }
 
-  // Poll status in the background so the bar dot reflects reality even when the
-  // panel has never been opened. When the panel is open it drives updates and
-  // pushes them back via root.status, so we back off here.
-  Process {
-    id: barStatusProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.status = Model.parseStatus(String(text || ""), 0)
-    }
-    onExited: function(code) {
-      if (code !== 0 && (!root.status || root.status.state === "unknown"))
-        root.status = Model.parseStatus("", code)
-    }
-  }
-
-  Timer {
-    interval: Model.BAR_POLL_INTERVAL_MS
-    repeat: true
-    running: !root.opened
-    triggeredOnStart: true
-    onTriggered: {
-      if (barStatusProc.running) return
-      barStatusProc.command = Model.statusCommand()
-      barStatusProc.running = true
-    }
-  }
-
+  // No background polling: nym-vpnd is polkit-gated, so a timer would pop a
+  // password prompt every few seconds. The bar reflects the last status the
+  // panel fetched (on open / refresh / after an action); until then it shows a
+  // neutral "unknown" dot.
   Loader {
     id: panelLoader
     active: true
