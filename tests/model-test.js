@@ -30,6 +30,12 @@ test("accountSetCommand is argv (no shell) and never interpolates the phrase", (
   assert.deepStrictEqual(c, ["nym-vpnc", "account", "set", "word1 word2 word3"])
   // must NOT be a shell string that could leak the phrase into a log/clipboard
   assert.notStrictEqual(c[0], "sh")
+  // Exactly one argv slot carries the secret (the trailing positional), and no
+  // element is a shell wrapper. nym-vpnc offers no stdin/file/env input, so argv
+  // is the only channel; keep it tight so nothing else can smuggle the phrase.
+  assert.strictEqual(c.length, 4)
+  assert.ok(!c.slice(0, 3).some((a) => /word1|word2|word3/.test(a)))
+  assert.ok(!c.some((a) => a === "sh" || a === "-c" || a === "bash"))
 })
 
 test("accountForgetCommand", () => {

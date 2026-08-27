@@ -762,7 +762,7 @@ Panel {
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              text: "Entered here and passed straight to nym-vpnd, which stores it locally. It never leaves your machine or touches the clipboard."
+              text: "Entered here and passed straight to nym-vpnd via the nym-vpnc CLI, which stores it locally. It never leaves your machine, touches the clipboard, or hits a log. The CLI only accepts the phrase as a command argument, so it is briefly visible to other processes on this machine (same user or root) while login runs."
               color: Color.muted
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.caption

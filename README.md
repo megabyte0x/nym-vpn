@@ -52,9 +52,36 @@ EOF
 Then log out/in (or restart your polkit agent). This trades a little security for
 convenience; skip it if you prefer to approve each prompt.
 
-> Security: the plugin never asks for your recovery phrase inside the shell.
-> Log in once from a terminal with `nym-vpnc account set`; the plugin only
-> issues `status`, `connect`, `disconnect`, `tunnel`, and `gateway` commands.
+### Recovery-phrase handling (security)
+
+You can log in two ways: run `nym-vpnc account set <phrase>` yourself in a
+terminal, or use the panel's inline **Log in** (masked field, no full-screen
+dialog, no clipboard).
+
+Either way the mnemonic ends up on the `nym-vpnc` **command line**, because the
+official CLI accepts the recovery phrase *only* as a positional argument
+(`nym-vpnc account set <mnemonic>`) — it has no stdin, file, or environment-
+variable input path. When the panel logs you in, the plugin therefore builds an
+**argv array** (never a shell string), so the phrase is:
+
+- never parsed by a shell (no injection, no shell history);
+- never written to the clipboard, a file, or a log;
+- passed straight to `nym-vpnd`, which stores it locally — it never leaves the
+  machine;
+- sent only on an explicit **Log in** click, never in the background, and held
+  only in the masked field until the panel closes or login completes.
+
+The one unavoidable exposure, shared with running `nym-vpnc account set` by hand,
+is that the phrase is visible in that process's arguments (`/proc/<pid>/cmdline`)
+for the brief duration of the login call. This is limited to other processes on
+the same machine (your own user, or root); such a caller can already read
+`nym-vpnd`'s stored credentials, so it is not a privilege escalation. The panel
+states this caveat before you submit. On shared/multi-user hosts, prefer
+completing the login in a controlled session (and consider `hidepid` on `/proc`)
+if the login window matters to your threat model.
+
+All other panel actions — `status`, `connect`, `disconnect`, `tunnel`, and
+`gateway` — carry no secrets.
 
 ## Install
 

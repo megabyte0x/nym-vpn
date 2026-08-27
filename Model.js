@@ -52,9 +52,25 @@ function connectCommand() {
   return sh(CLI + " connect 2>&1")
 }
 
-// Log in with a recovery phrase. Uses an argv array (NOT a shell string) so the
-// mnemonic is never interpolated into a shell command line, clipboard, or log.
-// nym-vpnd stores it locally; it does not leave the machine.
+// Log in with a recovery phrase.
+//
+// SECURITY / THREAT MODEL (see README "Recovery-phrase handling"):
+// The official `nym-vpnc account set` accepts the mnemonic ONLY as a positional
+// argument (upstream: `Set { secret: String, #[arg(index = 1)] }` in
+// nym-vpnc/src/commands/account.rs) -- there is no stdin, file, or env input
+// path. So when the plugin drives the official CLI the phrase is unavoidably
+// present in that process's argv (visible via /proc/<pid>/cmdline) for the brief
+// duration of the login RPC. We minimise the blast radius as far as the CLI
+// allows:
+//   * argv array, NOT a shell string -> no shell parsing, no injection, and the
+//     phrase never lands in a shell history, log line, or the clipboard.
+//   * called only on an explicit user Log-in action, never in the background.
+//   * the phrase is held only in the masked TextField and cleared when the
+//     panel closes or login completes.
+// Residual exposure is limited to same-machine process inspection (same user or
+// root) for the login window; such a caller can already read nym-vpnd's stored
+// credentials, so this is not a privilege escalation. The panel shows the user
+// this caveat before they submit (informed consent).
 function accountSetCommand(phrase) {
   return [CLI, "account", "set", normalizePhrase(phrase)]
 }
