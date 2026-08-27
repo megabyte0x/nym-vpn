@@ -22,7 +22,8 @@ nym-vpnc account set <your recovery phrase>   # log in (run in a terminal)
 ```
 
 The `nym-vpnd` daemon must be running for `nym-vpnc` to work. If the CLI or the
-daemon is missing, the panel shows a setup card with the exact commands to run.
+daemon is missing, the panel shows a setup card with the exact commands to run —
+click the command box (or its **Copy** button) to copy it to the clipboard.
 
 > Security: the plugin never asks for your recovery phrase inside the shell.
 > Log in once from a terminal with `nym-vpnc account set`; the plugin only

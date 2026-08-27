@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -22,6 +23,24 @@ Panel {
   property var twoHop: null
   property var gateway: ({ entry: "", exit: "" })
   property string notice: ""
+  property bool copied: false
+
+  // The remediation command shown in the setup card, shared by the label and
+  // the copy button so they never drift.
+  readonly property string setupCommand: !installed
+    ? "yay -S nym-vpnd-bin nym-vpn-app-bin\nsudo systemctl enable --now nym-vpnd"
+    : (daemonDown
+       ? "sudo systemctl enable --now nym-vpnd"
+       : "nym-vpnc account set <your recovery phrase>")
+
+  // Copy text to the Wayland clipboard via wl-copy, matching the shell's own
+  // network/tailscale panels.
+  function copyCommand(value) {
+    if (!value) return
+    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(value) + " | wl-copy"])
+    root.copied = true
+    copiedTimer.restart()
+  }
 
   readonly property bool installed: status.state !== "not-installed"
   readonly property bool daemonDown: status.state === "daemon-down"
@@ -158,6 +177,12 @@ Panel {
   }
 
   Timer {
+    id: copiedTimer
+    interval: 1400
+    onTriggered: root.copied = false
+  }
+
+  Timer {
     id: settleTimer
     interval: 600
     onTriggered: {
@@ -263,22 +288,40 @@ Panel {
             width: parent.width
             implicitHeight: setupText.implicitHeight + Style.space(16)
             radius: Style.cornerRadius
-            color: Style.hoverFill
+            color: copyMouse.containsMouse ? Style.selectedFill : Style.hoverFill
 
             Text {
               id: setupText
-              anchors.fill: parent
+              anchors.left: parent.left
+              anchors.right: copyLabel.left
+              anchors.top: parent.top
               anchors.margins: Style.space(8)
               wrapMode: Text.WrapAnywhere
               textFormat: Text.PlainText
               color: root.contentForeground
               font.family: "monospace"
               font.pixelSize: Style.font.caption
-              text: !root.installed
-                    ? "yay -S nym-vpnd-bin nym-vpn-app-bin\nsudo systemctl enable --now nym-vpnd"
-                    : (root.daemonDown
-                       ? "sudo systemctl enable --now nym-vpnd"
-                       : "nym-vpnc account set <your recovery phrase>")
+              text: root.setupCommand
+            }
+
+            Text {
+              id: copyLabel
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.margins: Style.space(8)
+              text: root.copied ? "Copied" : "Copy"
+              color: root.copied ? Color.accent : (copyMouse.containsMouse ? root.contentForeground : Color.muted)
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: root.copied
+            }
+
+            MouseArea {
+              id: copyMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.copyCommand(root.setupCommand)
             }
           }
 
@@ -286,7 +329,7 @@ Panel {
             width: parent.width
             wrapMode: Text.WordWrap
             visible: root.installed && !root.daemonDown && !root.account.stored
-            text: "Run the command above in a terminal (never paste your recovery phrase here), then press r to refresh."
+            text: "Click the command above to copy it, then run it in a terminal (never paste your recovery phrase here) and press r to refresh."
             color: Color.muted
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption
