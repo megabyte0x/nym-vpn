@@ -367,7 +367,7 @@ Panel {
             Text {
               width: parent.width
               elide: Text.ElideRight
-              text: root.status.label + (root.status.detail !== "" && root.status.detail.toLowerCase() !== root.status.label.toLowerCase() ? " · " + root.status.detail : "")
+              text: root.status.label
               color: root.colorForRole(Model.stateColorRole(root.status.state))
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.bodySmall
