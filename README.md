@@ -14,21 +14,61 @@ CLI in a terminal (see [Logging in](#logging-in)).
 
 ## Requirements
 
-This plugin is a front-end for the NymVPN CLI. Install the NymVPN client and a
-subscription/account first — see <https://nym.com/download/linux>.
+- **Omarchy (Quattro bar).** This is an Omarchy bar-widget plugin.
+- **A NymVPN account.** Create one and get your recovery phrase at
+  <https://nym.com> — see <https://nym.com/download/linux> for the client.
+- **The `nym-vpnc` CLI and `nym-vpnd` daemon.** The plugin is a front-end that
+  drives the official CLI; it makes no network calls of its own.
 
-On Arch / Omarchy — the daemon and GUI packages do **not** include the
-`nym-vpnc` CLI, so install the CLI package (`nym-vpnc-bin`) explicitly:
+## Installation
+
+Follow these steps in order. The panel also shows a setup card with the exact
+command for whichever step is still outstanding (with a **Copy** button) so you
+can complete setup without leaving Omarchy.
+
+### 1. Install the CLI and daemon
+
+On Arch / Omarchy the daemon and GUI packages do **not** include the `nym-vpnc`
+CLI, so install the CLI package (`nym-vpnc-bin`) explicitly:
 
 ```sh
-yay -S nym-vpnc-bin nym-vpnd-bin           # CLI + daemon (nym-vpn-app-bin is the optional GUI)
-sudo systemctl enable --now nym-vpnd       # start the privileged daemon
-nym-vpnc account set <your recovery phrase>   # log in (run in a terminal)
+yay -S nym-vpnc-bin nym-vpnd-bin   # CLI + daemon (nym-vpn-app-bin is the optional GUI)
 ```
 
-The `nym-vpnd` daemon must be running for `nym-vpnc` to work. If the CLI or the
-daemon is missing, the panel shows a setup card with the exact commands to run —
-click the command box (or its **Copy** button) to copy it to the clipboard.
+### 2. Start the daemon
+
+`nym-vpnd` is a privileged system service and must be running for `nym-vpnc` to
+work:
+
+```sh
+sudo systemctl enable --now nym-vpnd
+```
+
+### 3. Add the plugin to Omarchy
+
+```sh
+omarchy plugin add https://github.com/megabyte0x/nym-vpn.git --enable
+```
+
+The `nym` widget appears in the bar (right section by default). Left-click it to
+open the panel.
+
+### 4. Log in from a terminal
+
+Log in **yourself** with the official CLI — the plugin never asks for or handles
+your recovery phrase (see [Logging in](#logging-in) for why):
+
+```sh
+nym-vpnc account set <your recovery phrase>   # run in your own terminal
+```
+
+Then reopen the panel (or press `r`); it will detect the configured account.
+You're ready to **Connect**.
+
+When `nym-vpnd` gates calls behind a password prompt (polkit), the panel asks
+you to approve it — approving per action is the recommended default. See
+[Authentication prompts](#authentication-prompts-polkit) for the trade-offs of
+the optional passwordless rule.
 
 ## Logging in
 
@@ -80,12 +120,6 @@ the system prompt; approving per action is the recommended default.
 >
 > Then log out/in (or restart your polkit agent). Skip this if you prefer to
 > approve each prompt.
-
-## Install
-
-```sh
-omarchy plugin add https://github.com/megabyte0x/nym-vpn.git --enable
-```
 
 ## Usage
 
