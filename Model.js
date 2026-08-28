@@ -2,11 +2,13 @@
 // parsing their output. No Qt/Quickshell imports here so the same logic can be
 // unit-tested under Node (see tests/model-test.js).
 //
-// IMPORTANT: nym-vpnd gates every RPC connection behind a polkit policy
-// (com.nymvpn.vpnd.unix-access, allow_active = auth_self, no caching), so each
-// `nym-vpnc status/connect/disconnect/account` call pops a password prompt.
-// The plugin therefore NEVER polls on a timer -- it only touches the daemon on
-// explicit user action to keep authentication prompts to a minimum.
+// State + polling live in NymService.qml (a process-wide Quickshell Singleton),
+// which shares one source of truth across every per-monitor bar instance. On
+// current nym-vpnd builds the read-only `status` call is ungated, so the service
+// polls it (~10s) to keep the bar live. Privileged calls (connect/disconnect)
+// may still be polkit-gated; if a `status` ever returns auth-required the
+// service stops background polling and falls back to on-demand refresh so users
+// are never spammed with prompts. These helpers stay pure (no Qt) for testing.
 
 var CLI = "nym-vpnc"
 

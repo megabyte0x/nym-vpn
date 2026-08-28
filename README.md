@@ -99,13 +99,18 @@ forget`). All panel actions — `status`, `connect`, `disconnect`, `tunnel`,
 
 ### Authentication prompts (polkit)
 
-Recent `nym-vpnd` builds gate every daemon call behind a polkit action
-(`com.nymvpn.vpnd.unix-access`, `allow_active = auth_self`), so **each**
-`status` / `connect` / `disconnect` asks for your password. Because of this the
-plugin **never polls in the background** — it only talks to the daemon when you
-open the panel, press `r`, or click Connect/Disconnect, so you get at most one
-prompt per action. When authentication is needed, the panel asks you to approve
-the system prompt; approving per action is the recommended default.
+On current `nym-vpnd` builds the read-only `status` call is **not** gated, so a
+shared background service polls `status` about every **10 seconds** to keep the
+bar dot live and identical across every monitor. Privileged calls
+(`connect` / `disconnect`) may still be gated behind a polkit action
+(`com.nymvpn.vpnd.unix-access`), prompting for your password per action.
+
+If a `status` call ever comes back *authentication required* (a daemon that
+gates reads too), the plugin **stops background polling automatically** and
+falls back to on-demand refresh — talking to the daemon only when you open the
+panel, press `r`, or click Connect/Disconnect — so you are never spammed with
+prompts. When authentication is needed, the panel asks you to approve the
+system prompt; approving per action is the recommended default.
 
 > **Advanced / optional — not a setup step.** If you fully understand the
 > trade-off, you *can* allow the active local user to reach the daemon without a

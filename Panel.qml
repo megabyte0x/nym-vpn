@@ -4,6 +4,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "." as Nym
 
 Panel {
   id: root
@@ -17,28 +18,20 @@ Panel {
   readonly property color contentForeground: bar ? bar.barForeground : Color.foreground
   readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
 
-  // Live state, parsed from the CLI.
-  property var status: Model.parseStatus("", 0)
-  property var account: ({ stored: false, identity: "", state: "", mode: "" })
-  property bool accountFetched: false
-  property var twoHop: null
-  property var gateway: ({ entry: "", exit: "" })
-  // Available gateway countries per pool ("mixnet-entry"|"mixnet-exit"|"wg"),
-  // fetched lazily from `nym-vpnc gateway list` and cached so the pickers open
-  // instantly. Shape: { <type>: ["US", "DE", ...] }.
-  property var countryCodes: ({})
-  // Which pool feeds each hop for the current mode.
-  readonly property string entryType: Model.entryGatewayType(root.twoHop)
-  readonly property string exitType: Model.exitGatewayType(root.twoHop)
-  readonly property var entryOptions: Model.countryOptions(root.countryCodes[root.entryType] || [])
-  readonly property var exitOptions: Model.countryOptions(root.countryCodes[root.exitType] || [])
-  property string notice: ""
+  // All live state + CLI interaction lives in the process-wide NymService
+  // singleton, so every monitor's bar and every open panel share ONE source of
+  // truth (fixes per-screen divergence) and reflect the background status poll.
+  // These are thin read-only projections of that shared state.
+  readonly property var status: Nym.NymService.status
+  readonly property var account: Nym.NymService.account
+  readonly property bool accountFetched: Nym.NymService.accountFetched
+  readonly property var twoHop: Nym.NymService.twoHop
+  readonly property var gateway: Nym.NymService.gateway
+  readonly property var entryOptions: Nym.NymService.entryOptions
+  readonly property var exitOptions: Nym.NymService.exitOptions
+  readonly property string notice: Nym.NymService.notice
+  readonly property bool loggedIn: Nym.NymService.loggedIn
   property bool copied: false
-  // True once we've seen the daemon answer without an auth prompt (polkit rule
-  // installed / socket open). Gates auto account fetch and post-action polling
-  // so users WITHOUT the rule are never spammed with prompts.
-  property bool authFree: false
-  readonly property bool loggedIn: accountFetched && account.stored
 
   // The remediation command shown in the setup card (install / start daemon).
   // Auth-required is NOT a copyable command here: we tell the user to approve
@@ -63,7 +56,7 @@ Panel {
   readonly property bool daemonDown: status.state === "daemon-down"
   readonly property bool authRequired: status.state === "auth-required"
   readonly property bool needsSetup: status.state === "not-installed" || status.state === "daemon-down" || status.state === "auth-required"
-  readonly property bool actionBusy: actionProc.running
+  readonly property bool actionBusy: Nym.NymService.actionBusy
 
   function colorForRole(role) {
     if (role === "ok") return Color.accent
@@ -74,11 +67,10 @@ Panel {
 
   function open() {
     root.controller.show()
-    root.refreshAll()
+    Nym.NymService.refreshAll()
   }
 
   function close() {
-    root.watchTicks = 0
     root.controller.hide()
   }
 
@@ -93,185 +85,15 @@ Panel {
     return false
   }
 
-  // One daemon-touching call (status). Config reads (tunnel/gateway) are not
-  // polkit-gated, so they don't add prompts. The account is auto-fetched only
-  // once we know the daemon answers without a prompt (authFree) so users
-  // without the polkit rule aren't spammed; otherwise it's fetched on demand.
-  function refreshAll() {
-    root.refreshStatus()
-    root.refreshConfig()
-    root.refreshCountries()
-    if (root.authFree) root.refreshAccount()
-  }
-
-  function refreshAccount() {
-    if (accountProc.running) return
-    accountProc.command = Model.accountCommand()
-    accountProc.running = true
-  }
-
-  function refreshStatus() {
-    if (statusProc.running) return
-    statusProc.command = Model.statusCommand()
-    statusProc.running = true
-  }
-
-  function refreshConfig() {
-    if (!tunnelProc.running) {
-      tunnelProc.command = Model.tunnelGetCommand()
-      tunnelProc.running = true
-    }
-    if (!gatewayProc.running) {
-      gatewayProc.command = Model.gatewayGetCommand()
-      gatewayProc.running = true
-    }
-  }
-
-  function runAction(command) {
-    if (!command || actionProc.running) return
-    root.notice = ""
-    actionProc.command = command
-    actionProc.running = true
-  }
-
-  function doConnect() { root.runAction(Model.connectCommand()); root.startWatch() }
-  function doDisconnect() { root.runAction(Model.disconnectCommand()); root.startWatch() }
-
-  function doForget() {
-    root.runAction(Model.accountForgetCommand())
-    root.accountFetched = false
-  }
-
-  // Bounded post-action status polling so Connect visibly reaches Connected.
-  // Only runs when authFree (no prompts) to avoid spamming users without the
-  // polkit rule.
-  property int watchTicks: 0
-  function startWatch() { if (root.authFree) root.watchTicks = 8 }
-  function setMode(twoHopOn) {
-    if (root.twoHop === twoHopOn) return
-    root.runAction(Model.setTwoHopCommand(twoHopOn))
-  }
-  // Apply a single hop's country selection immediately when the user picks it.
-  function applyGateway(role, value) {
-    var command = Model.setGatewayCommand(role, value)
-    if (!command) return
-    root.runAction(command)
-  }
-
-  // Fetch the country list for a gateway pool once and cache it. Safe to call
-  // repeatedly; it no-ops while a fetch is in flight or already cached.
-  function ensureCountries(type) {
-    if (!type) return
-    if (root.countryCodes[type] && root.countryCodes[type].length > 0) return
-    if (listProc.running) return
-    listProc.pendingType = type
-    listProc.command = Model.gatewayListCommand(type)
-    listProc.running = true
-  }
-
-  // Make sure both hops' pools for the current mode are loaded.
-  function refreshCountries() {
-    root.ensureCountries(root.entryType)
-    if (root.exitType !== root.entryType) root.ensureCountries(root.exitType)
-  }
-
-  // --- Processes -----------------------------------------------------------
-
-  Process {
-    id: statusProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        root.status = Model.parseStatus(String(text || ""), 0)
-        // Learn whether the daemon answers without a polkit prompt.
-        if (root.status.state !== "auth-required" && root.status.state !== "unknown" &&
-            root.status.state !== "not-installed") {
-          if (!root.authFree) {
-            root.authFree = true
-            if (root.opened && !root.accountFetched) root.refreshAccount()
-          }
-        } else if (root.status.state === "auth-required") {
-          root.authFree = false
-        }
-      }
-    }
-    onExited: function(code) {
-      if (code !== 0 && root.status && root.status.state === "unknown")
-        root.status = Model.parseStatus("", code)
-    }
-  }
-
-  Process {
-    id: accountProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        root.account = Model.parseAccount(String(text || ""))
-        root.accountFetched = true
-      }
-    }
-  }
-
-  Process {
-    id: tunnelProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var v = Model.parseTwoHop(String(text || ""))
-        if (v !== null) {
-          root.twoHop = v
-          // Mode determines which gateway pool feeds each hop; load it.
-          root.refreshCountries()
-        }
-      }
-    }
-  }
-
-  Process {
-    id: gatewayProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.gateway = Model.parseGateway(String(text || ""))
-    }
-  }
-
-  // Lazy country-list fetch for the pickers. `gateway list` is a config read
-  // (not polkit-gated), so it doesn't add password prompts.
-  Process {
-    id: listProc
-    property string pendingType: ""
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var codes = Model.parseGatewayCountries(String(text || ""))
-        if (listProc.pendingType !== "" && codes.length > 0) {
-          var next = Object.assign({}, root.countryCodes)
-          next[listProc.pendingType] = codes
-          root.countryCodes = next
-        }
-      }
-    }
-    onExited: {
-      listProc.pendingType = ""
-      // If the other hop's pool is still empty, fetch it now.
-      root.refreshCountries()
-    }
-  }
-
-  Process {
-    id: actionProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var out = String(text || "").trim()
-        if (out !== "") root.notice = out.split("\n").slice(-1)[0]
-      }
-    }
-    onExited: function(code) {
-      // Give the daemon a moment to change state, then re-read everything.
-      settleTimer.restart()
-    }
-  }
+  // Thin delegators to the shared NymService singleton, which owns all CLI
+  // interaction, parsed state and the background status poll.
+  function refreshAll() { Nym.NymService.refreshAll() }
+  function refreshAccount() { Nym.NymService.refreshAccount() }
+  function doConnect() { Nym.NymService.connect() }
+  function doDisconnect() { Nym.NymService.disconnect() }
+  function doForget() { Nym.NymService.forget() }
+  function setMode(twoHopOn) { Nym.NymService.setMode(twoHopOn) }
+  function applyGateway(role, value) { Nym.NymService.applyGateway(role, value) }
 
   Timer {
     id: copiedTimer
@@ -279,36 +101,9 @@ Panel {
     onTriggered: root.copied = false
   }
 
-  Timer {
-    id: settleTimer
-    interval: 600
-    onTriggered: {
-      root.refreshStatus()
-      root.refreshConfig()
-      if (root.authFree) root.refreshAccount()
-    }
-  }
-
-  // Bounded post-action polling: only active for a few ticks after Connect/
-  // Disconnect, and only when authFree (no prompts). Stops early on a terminal
-  // state. Users without the polkit rule never poll (watchTicks stays 0).
-  Timer {
-    id: watchTimer
-    interval: 2500
-    repeat: true
-    running: root.opened && root.authFree && root.watchTicks > 0
-    onTriggered: {
-      root.watchTicks -= 1
-      root.refreshStatus()
-      var s = root.status.state
-      if (s === "connected" || s === "disconnected" || s === "error")
-        root.watchTicks = 0
-    }
-  }
-
-  // No always-on poll timer: without the polkit rule each status call prompts,
-  // so we refresh only on explicit action (open, r, connect/disconnect).
-  onOpenedChanged: if (root.opened) root.refreshConfig()
+  // Live status now comes from NymService's background poll; the panel just
+  // asks for an immediate refresh when it opens.
+  onOpenedChanged: if (root.opened) Nym.NymService.refreshAll()
 
   // --- UI ------------------------------------------------------------------
 

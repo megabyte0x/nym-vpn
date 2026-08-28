@@ -3,6 +3,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "." as Nym
 
 BarWidget {
   id: root
@@ -11,9 +12,11 @@ BarWidget {
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
   readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
 
-  // Mirror of the panel's current status so the bar can render without the
-  // panel being open.
-  property var status: Model.parseStatus("", 0)
+  // Live status from the process-wide NymService singleton. Because the bar is
+  // instantiated per monitor, binding to the shared singleton (rather than this
+  // screen's own panel) keeps every monitor's dot identical and up to date via
+  // the service's background status poll.
+  readonly property var status: Nym.NymService.status
 
   function injectPanel() {
     var target = panelLoader.item
@@ -40,11 +43,9 @@ BarWidget {
     if (panelLoader.item) panelLoader.item.closeForPopoutSwitch()
   }
 
-  // Refresh delegates to the panel so we make exactly ONE daemon call per user
-  // action. The daemon is polkit-gated (a password prompt per call), so we must
-  // never poll on a timer or fan out multiple status calls.
+  // Refresh delegates to the shared service (middle-click / IPC refresh).
   function refresh() {
-    if (panelLoader.item) panelLoader.item.refreshAll()
+    Nym.NymService.refreshAll()
   }
 
   implicitWidth: button.implicitWidth
@@ -60,10 +61,6 @@ BarWidget {
     return Color.muted
   }
 
-  // No background polling: nym-vpnd is polkit-gated, so a timer would pop a
-  // password prompt every few seconds. The bar reflects the last status the
-  // panel fetched (on open / refresh / after an action); until then it shows a
-  // neutral "unknown" dot.
   Loader {
     id: panelLoader
     active: true
@@ -72,16 +69,6 @@ BarWidget {
     onLoaded: {
       root.injectPanel()
       Qt.callLater(root.injectPanel)
-    }
-  }
-
-  // Let the panel publish its freshly-parsed status up to the bar.
-  Connections {
-    target: panelLoader.item
-    ignoreUnknownSignals: true
-    function onStatusChanged() {
-      if (panelLoader.item && panelLoader.item.status)
-        root.status = panelLoader.item.status
     }
   }
 
