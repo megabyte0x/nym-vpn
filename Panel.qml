@@ -629,37 +629,14 @@ Panel {
           spacing: Style.spacing.sm
           visible: root.installed && !root.daemonDown
 
-          // Summary row: account state (left) + Log out action (right, only
-          // when an account is configured).
+          // Log out action (right-aligned, only when an account is
+          // configured). The redundant account-state / mode summary line was
+          // removed -- connection state lives in the header and mode in the
+          // Mode toggle above.
           Item {
             width: parent.width
-            implicitHeight: acctLabel.implicitHeight
-
-            Text {
-              id: acctLabel
-              anchors.left: parent.left
-              anchors.right: acctAction.left
-              anchors.rightMargin: Style.spacing.sm
-              anchors.verticalCenter: parent.verticalCenter
-              elide: Text.ElideRight
-              text: {
-                var acct = root.accountFetched
-                  ? (root.account.stored ? "Account: " + (root.account.state !== "" ? root.account.state : "active") : "Account: not configured")
-                  : "Account: tap to check"
-                return acct + "  ·  " + Model.modeLabel(root.twoHop)
-              }
-              color: acctMouse.containsMouse ? root.contentForeground : Color.muted
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.caption
-
-              MouseArea {
-                id: acctMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.refreshAccount()
-              }
-            }
+            implicitHeight: root.loggedIn ? acctAction.implicitHeight : 0
+            visible: root.loggedIn
 
             Text {
               id: acctAction
@@ -764,15 +741,6 @@ Panel {
           font.pixelSize: Style.font.caption
         }
 
-        // Footer hint
-        Text {
-          width: parent.width
-          horizontalAlignment: Text.AlignHCenter
-          text: "r to refresh · Esc to close"
-          color: Color.muted
-          font.family: root.contentFontFamily
-          font.pixelSize: Style.font.caption
-        }
       }
     }
   }
