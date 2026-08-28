@@ -78,45 +78,22 @@ function connectCommand() {
   return sh(CLI + " connect 2>&1")
 }
 
-// Log in with a recovery phrase.
-//
-// SECURITY / THREAT MODEL (see README "Recovery-phrase handling"):
-// The official `nym-vpnc account set` accepts the mnemonic ONLY as a positional
-// argument (upstream: `Set { secret: String, #[arg(index = 1)] }` in
-// nym-vpnc/src/commands/account.rs) -- there is no stdin, file, or env input
-// path. So when the plugin drives the official CLI the phrase is unavoidably
-// present in that process's argv (visible via /proc/<pid>/cmdline) for the brief
-// duration of the login RPC. We minimise the blast radius as far as the CLI
-// allows:
-//   * argv array, NOT a shell string -> no shell parsing, no injection, and the
-//     phrase never lands in a shell history, log line, or the clipboard.
-//   * called only on an explicit user Log-in action, never in the background.
-//   * the phrase is held only in the masked TextField and cleared when the
-//     panel closes or login completes.
-// Residual exposure is limited to same-machine process inspection (same user or
-// root) for the login window; such a caller can already read nym-vpnd's stored
-// credentials, so this is not a privilege escalation. The panel shows the user
-// this caveat before they submit (informed consent).
-function accountSetCommand(phrase) {
-  return [CLI, "account", "set", normalizePhrase(phrase)]
+// NOTE: the plugin deliberately provides NO command builder that accepts a
+// recovery phrase. The official `nym-vpnc account set` takes the mnemonic ONLY
+// as a positional argument (upstream: `Set { secret: String, #[arg(index = 1)] }`
+// in nym-vpnc/src/commands/account.rs) -- there is no stdin, file, or env input
+// path -- so any client that logs in via the CLI unavoidably places the phrase
+// in that process's argv (visible via /proc/<pid>/cmdline). Rather than accept
+// that exposure, the plugin does not perform login at all: it only DETECTS and
+// CONTROLS an already-configured account (status/connect/disconnect/forget) and
+// directs the user to run `nym-vpnc account set <phrase>` themselves in a
+// terminal. See accountSetupHint() and the README "Logging in" section.
+function accountSetupHint() {
+  return CLI + " account set <your recovery phrase>"
 }
 
 function accountForgetCommand() {
   return sh(CLI + " account forget 2>&1")
-}
-
-function normalizePhrase(phrase) {
-  return text(phrase).replace(/\s+/g, " ")
-}
-
-// A NymVPN recovery phrase is a BIP39 mnemonic: 12/15/18/21/24 lowercase words.
-function looksLikeMnemonic(phrase) {
-  var words = normalizePhrase(phrase).toLowerCase().split(" ").filter(function (w) { return w.length > 0 })
-  if ([12, 15, 18, 21, 24].indexOf(words.length) < 0) return false
-  for (var i = 0; i < words.length; i++) {
-    if (!/^[a-z]+$/.test(words[i])) return false
-  }
-  return true
 }
 
 function disconnectCommand() {
@@ -450,9 +427,8 @@ if (typeof module !== "undefined" && module.exports) {
     tunnelGetCommand: tunnelGetCommand,
     connectCommand: connectCommand,
     disconnectCommand: disconnectCommand,
-    accountSetCommand: accountSetCommand,
+    accountSetupHint: accountSetupHint,
     accountForgetCommand: accountForgetCommand,
-    looksLikeMnemonic: looksLikeMnemonic,
     setTwoHopCommand: setTwoHopCommand,
     setCountriesCommand: setCountriesCommand,
     setGatewayCommand: setGatewayCommand,

@@ -6,6 +6,10 @@ switch between **Anonymous (5-hop mixnet)** and **Fast (2-hop WireGuard)** mode,
 and pick the **entry** and **exit** regions from a searchable, flag-labelled
 country list — all by driving the official `nym-vpnc` command-line client.
 
+The plugin **only detects and controls an already-configured account**. It never
+asks for or handles your recovery phrase — you log in yourself with the official
+CLI in a terminal (see [Logging in](#logging-in)).
+
 ![status glyph in the bar](preview.png)
 
 ## Requirements
@@ -26,6 +30,27 @@ The `nym-vpnd` daemon must be running for `nym-vpnc` to work. If the CLI or the
 daemon is missing, the panel shows a setup card with the exact commands to run —
 click the command box (or its **Copy** button) to copy it to the clipboard.
 
+## Logging in
+
+The plugin **does not accept your recovery phrase** and has no login field. The
+official `nym-vpnc account set` takes the mnemonic *only* as a positional
+command-line argument (no stdin, file, or environment-variable input), which
+would place the phrase in that process's argv (`/proc/<pid>/cmdline`) for the
+duration of the call. Rather than take on that credential exposure, the plugin
+leaves login entirely to you:
+
+```sh
+nym-vpnc account set <your recovery phrase>   # run in your own terminal
+```
+
+Running it yourself keeps that brief argv exposure under your direct control and
+out of a background GUI process. When no account is configured, the panel simply
+shows this command (with a **Copy** button for the `nym-vpnc account set` prefix)
+and asks you to complete it in a terminal, then press `r`. Once an account is
+configured, the panel detects it and offers **Log out** (`nym-vpnc account
+forget`). All panel actions — `status`, `connect`, `disconnect`, `tunnel`,
+`gateway`, and `account forget` — carry no secrets.
+
 ### Authentication prompts (polkit)
 
 Recent `nym-vpnd` builds gate every daemon call behind a polkit action
@@ -33,55 +58,28 @@ Recent `nym-vpnd` builds gate every daemon call behind a polkit action
 `status` / `connect` / `disconnect` asks for your password. Because of this the
 plugin **never polls in the background** — it only talks to the daemon when you
 open the panel, press `r`, or click Connect/Disconnect, so you get at most one
-prompt per action.
+prompt per action. When authentication is needed, the panel asks you to approve
+the system prompt; approving per action is the recommended default.
 
-To stop the prompts entirely, allow the active local user without a password by
-installing a polkit rule (the panel offers this command when authentication is
-needed):
-
-```sh
-sudo tee /etc/polkit-1/rules.d/49-nymvpn.rules >/dev/null <<'EOF'
-polkit.addRule(function(action, subject) {
-  if (action.id == "com.nymvpn.vpnd.unix-access" && subject.active && subject.local) {
-    return polkit.Result.YES;
-  }
-});
-EOF
-```
-
-Then log out/in (or restart your polkit agent). This trades a little security for
-convenience; skip it if you prefer to approve each prompt.
-
-### Recovery-phrase handling (security)
-
-You can log in two ways: run `nym-vpnc account set <phrase>` yourself in a
-terminal, or use the panel's inline **Log in** (masked field, no full-screen
-dialog, no clipboard).
-
-Either way the mnemonic ends up on the `nym-vpnc` **command line**, because the
-official CLI accepts the recovery phrase *only* as a positional argument
-(`nym-vpnc account set <mnemonic>`) — it has no stdin, file, or environment-
-variable input path. When the panel logs you in, the plugin therefore builds an
-**argv array** (never a shell string), so the phrase is:
-
-- never parsed by a shell (no injection, no shell history);
-- never written to the clipboard, a file, or a log;
-- passed straight to `nym-vpnd`, which stores it locally — it never leaves the
-  machine;
-- sent only on an explicit **Log in** click, never in the background, and held
-  only in the masked field until the panel closes or login completes.
-
-The one unavoidable exposure, shared with running `nym-vpnc account set` by hand,
-is that the phrase is visible in that process's arguments (`/proc/<pid>/cmdline`)
-for the brief duration of the login call. This is limited to other processes on
-the same machine (your own user, or root); such a caller can already read
-`nym-vpnd`'s stored credentials, so it is not a privilege escalation. The panel
-states this caveat before you submit. On shared/multi-user hosts, prefer
-completing the login in a controlled session (and consider `hidepid` on `/proc`)
-if the login window matters to your threat model.
-
-All other panel actions — `status`, `connect`, `disconnect`, `tunnel`, and
-`gateway` — carry no secrets.
+> **Advanced / optional — not a setup step.** If you fully understand the
+> trade-off, you *can* allow the active local user to reach the daemon without a
+> password prompt by installing a polkit rule. This weakens the daemon's access
+> control (any process running as your active local user could then drive the
+> VPN without authenticating), so it is **not recommended** and the plugin does
+> **not** offer to install it for you. If you choose to, write it yourself:
+>
+> ```sh
+> sudo tee /etc/polkit-1/rules.d/49-nymvpn.rules >/dev/null <<'EOF'
+> polkit.addRule(function(action, subject) {
+>   if (action.id == "com.nymvpn.vpnd.unix-access" && subject.active && subject.local) {
+>     return polkit.Result.YES;
+>   }
+> });
+> EOF
+> ```
+>
+> Then log out/in (or restart your polkit agent). Skip this if you prefer to
+> approve each prompt.
 
 ## Install
 
@@ -93,11 +91,9 @@ omarchy plugin add https://github.com/megabyte0x/nym-vpn.git --enable
 
 - **Left-click** the `nym` widget to open/close the control panel.
 - **Middle-click** to force a status refresh.
-- **Log in** with your NymVPN recovery phrase directly in the panel: click
-  **Log in**, paste your 12–24 word phrase into the masked field, and press
-  **Log in**. The phrase is entered inline (never a full-screen system dialog),
-  passed straight to `nym-vpnd` which stores it locally — it never touches the
-  clipboard or a log. Use **Log out** to forget the account.
+- **Log in** from a terminal with `nym-vpnc account set <your recovery phrase>`
+  (see [Logging in](#logging-in)). The panel does not accept the phrase; it only
+  detects a configured account and offers **Log out** to forget it.
 - In the panel: **Connect** / **Disconnect** and choose **Mode**.
 - Pick your **Entry region** and **Exit region** from the two dropdowns. Each
   opens a searchable list of the countries NymVPN currently has gateways in,

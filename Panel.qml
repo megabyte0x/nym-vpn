@@ -34,26 +34,21 @@ Panel {
   readonly property var exitOptions: Model.countryOptions(root.countryCodes[root.exitType] || [])
   property string notice: ""
   property bool copied: false
-  // Inline login (recovery phrase) state.
-  property bool loggingIn: false
   // True once we've seen the daemon answer without an auth prompt (polkit rule
   // installed / socket open). Gates auto account fetch and post-action polling
   // so users WITHOUT the rule are never spammed with prompts.
   property bool authFree: false
-  readonly property bool loginBusy: loginProc.running
   readonly property bool loggedIn: accountFetched && account.stored
 
-  // The remediation command shown in the setup card, shared by the label and
-  // the copy button so they never drift.
+  // The remediation command shown in the setup card (install / start daemon).
+  // Auth-required is NOT a copyable command here: we tell the user to approve
+  // the password prompt rather than presenting a broad passwordless polkit rule
+  // as a default step. Account login is likewise never a copy-and-run secret
+  // command driven by the panel -- see the account section, which points the
+  // user to run `nym-vpnc account set` themselves in a terminal.
   readonly property string setupCommand: !installed
     ? "yay -S nym-vpnc-bin nym-vpnd-bin\nsudo systemctl enable --now nym-vpnd"
-    : (daemonDown
-       ? "sudo systemctl enable --now nym-vpnd"
-       : (authRequired
-          // Optional: allow the active user to reach the daemon without a
-          // password prompt on every call.
-          ? "sudo tee /etc/polkit-1/rules.d/49-nymvpn.rules >/dev/null <<'EOF'\npolkit.addRule(function(action, subject) {\n  if (action.id == \"com.nymvpn.vpnd.unix-access\" && subject.active && subject.local) {\n    return polkit.Result.YES;\n  }\n});\nEOF"
-          : "nym-vpnc account set <your recovery phrase>"))
+    : (daemonDown ? "sudo systemctl enable --now nym-vpnd" : "")
 
   // Copy text to the Wayland clipboard via wl-copy, matching the shell's own
   // network/tailscale panels.
@@ -68,7 +63,7 @@ Panel {
   readonly property bool daemonDown: status.state === "daemon-down"
   readonly property bool authRequired: status.state === "auth-required"
   readonly property bool needsSetup: status.state === "not-installed" || status.state === "daemon-down" || status.state === "auth-required"
-  readonly property bool actionBusy: actionProc.running || loginProc.running
+  readonly property bool actionBusy: actionProc.running
 
   function colorForRole(role) {
     if (role === "ok") return Color.accent
@@ -83,8 +78,6 @@ Panel {
   }
 
   function close() {
-    root.loggingIn = false
-    phraseField.text = ""
     root.watchTicks = 0
     root.controller.hide()
   }
@@ -143,19 +136,6 @@ Panel {
 
   function doConnect() { root.runAction(Model.connectCommand()); root.startWatch() }
   function doDisconnect() { root.runAction(Model.disconnectCommand()); root.startWatch() }
-
-  // Log in with a recovery phrase entered inline in this panel.
-  function doLogin() {
-    var phrase = phraseField.text
-    if (!Model.looksLikeMnemonic(phrase)) {
-      root.notice = "Enter your 12–24 word recovery phrase"
-      return
-    }
-    if (loginProc.running) return
-    root.notice = ""
-    loginProc.command = Model.accountSetCommand(phrase)
-    loginProc.running = true
-  }
 
   function doForget() {
     root.runAction(Model.accountForgetCommand())
@@ -218,25 +198,6 @@ Panel {
     onExited: function(code) {
       if (code !== 0 && root.status && root.status.state === "unknown")
         root.status = Model.parseStatus("", code)
-    }
-  }
-
-  Process {
-    id: loginProc
-    stdout: StdioCollector { id: loginOut; waitForEnd: true }
-    stderr: StdioCollector { id: loginErr; waitForEnd: true }
-    onExited: function(code) {
-      var out = (String(loginOut.text || "") + "\n" + String(loginErr.text || "")).trim()
-      var last = out.split("\n").filter(function(l){ return l.trim() !== "" }).slice(-1)[0] || ""
-      if (code === 0) {
-        root.notice = last !== "" ? last : "Account set. Welcome to NymVPN!"
-        phraseField.text = ""
-        root.loggingIn = false
-        root.accountFetched = false
-        settleTimer.restart()
-      } else {
-        root.notice = last !== "" ? last : "Login failed"
-      }
     }
   }
 
@@ -357,17 +318,17 @@ Panel {
     owner: root.barIdentity
     bar: root.bar
     open: root.opened
-    focusTarget: root.loggingIn ? phraseField : keyCatcher
+    focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(320))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      // While a region picker (search field + result list) or the inline login
-      // field owns the keyboard, suspend the panel's own key handling so typing
-      // doesn't leak into shortcuts and Esc closes the popup, not the panel.
-      blocked: entryPicker.popupOpen || exitPicker.popupOpen || root.loggingIn
+      // While a region picker (search field + result list) owns the keyboard,
+      // suspend the panel's own key handling so typing doesn't leak into
+      // shortcuts and Esc closes the popup, not the panel.
+      blocked: entryPicker.popupOpen || exitPicker.popupOpen
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(key) { if (key === "r") root.refreshAll() }
@@ -429,7 +390,7 @@ Panel {
                   ? "NymVPN CLI (nym-vpnc) not found. The daemon/GUI packages don't include it — install the CLI package, then reopen this panel."
                   : (root.daemonDown
                      ? "The nym-vpnd daemon is not running."
-                     : "nym-vpnd asks for your password on every action (polkit). Approve the prompt to continue — or install the optional rule below to allow the active user without repeated prompts.")
+                     : "nym-vpnd asks for your password (polkit) on each action. Approve the system prompt to continue, then press r.")
             color: root.authRequired ? root.contentForeground : Color.urgent
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.bodySmall
@@ -437,6 +398,7 @@ Panel {
 
           Rectangle {
             width: parent.width
+            visible: root.setupCommand !== ""
             implicitHeight: setupText.implicitHeight + Style.space(16)
             radius: Style.cornerRadius
             color: copyMouse.containsMouse ? Style.selectedFill : Style.hoverFill
@@ -480,7 +442,7 @@ Panel {
             width: parent.width
             wrapMode: Text.WordWrap
             visible: root.authRequired
-            text: "Click the command above to copy it, run it once in a terminal, then log out/in (or restart the polkit agent) and press r. This lets the active local user reach the daemon without a password prompt every time."
+            text: "Prefer approving the prompt per action. Advanced users can optionally allow the active local user without a prompt via a polkit rule — see the README; this trades security for convenience and is not required."
             color: Color.muted
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption
@@ -659,14 +621,16 @@ Panel {
 
         PanelSeparator { visible: root.installed && !root.daemonDown }
 
-        // Account + Login. The recovery phrase is entered INLINE here (masked),
-        // never in a screen-grabbing system dialog.
+        // Account. The plugin only DETECTS and CONTROLS an already-configured
+        // account: it never accepts a recovery phrase (that would place the
+        // mnemonic in nym-vpnc's argv). Login is done by the user in a terminal.
         Column {
           width: parent.width
           spacing: Style.spacing.sm
           visible: root.installed && !root.daemonDown
 
-          // Summary row: account state (left) + Log in / Log out action (right)
+          // Summary row: account state (left) + Log out action (right, only
+          // when an account is configured).
           Item {
             width: parent.width
             implicitHeight: acctLabel.implicitHeight
@@ -680,7 +644,7 @@ Panel {
               elide: Text.ElideRight
               text: {
                 var acct = root.accountFetched
-                  ? (root.account.stored ? "Account: " + (root.account.state !== "" ? root.account.state : "active") : "Account: not logged in")
+                  ? (root.account.stored ? "Account: " + (root.account.state !== "" ? root.account.state : "active") : "Account: not configured")
                   : "Account: tap to check"
                 return acct + "  ·  " + Model.modeLabel(root.twoHop)
               }
@@ -701,7 +665,8 @@ Panel {
               id: acctAction
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              text: root.loggedIn ? "Log out" : (root.loggingIn ? "Cancel" : "Log in")
+              visible: root.loggedIn
+              text: "Log out"
               color: acctActionMouse.containsMouse ? root.contentForeground : Color.accent
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.caption
@@ -713,90 +678,74 @@ Panel {
                 anchors.margins: -Style.space(6)
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  if (root.loggedIn) root.doForget()
-                  else root.loggingIn = !root.loggingIn
-                }
+                onClicked: root.doForget()
               }
             }
           }
 
-          // Inline recovery-phrase entry (masked). Focus stays in this panel.
+          // Not-configured: point the user to the terminal login flow. The
+          // plugin never takes the phrase itself, because the official CLI only
+          // accepts it as an argv positional (visible in /proc); running it in
+          // your own terminal keeps that exposure under your direct control.
           Column {
             width: parent.width
             spacing: Style.spacing.sm
-            visible: root.loggingIn && !root.loggedIn
+            visible: root.accountFetched && !root.account.stored
 
-            TextField {
-              id: phraseField
+            Text {
               width: parent.width
-              password: true
-              placeholderText: "12–24 word recovery phrase"
-              foreground: root.contentForeground
+              wrapMode: Text.WordWrap
+              text: "No account configured. Log in from a terminal with the official CLI, then press r:"
+              color: root.contentForeground
               font.family: root.contentFontFamily
-              onAccepted: root.doLogin()
+              font.pixelSize: Style.font.caption
             }
 
-            Row {
+            Rectangle {
               width: parent.width
-              spacing: Style.spacing.sm
+              implicitHeight: acctSetupText.implicitHeight + Style.space(16)
+              radius: Style.cornerRadius
+              color: acctCopyMouse.containsMouse ? Style.selectedFill : Style.hoverFill
 
-              Rectangle {
-                width: (parent.width - Style.spacing.sm) / 2
-                implicitHeight: loginLabel.implicitHeight + Style.space(14)
-                radius: Style.cornerRadius
-                readonly property bool enabled: !root.loginBusy && Model.looksLikeMnemonic(phraseField.text)
-                color: loginMouse.containsMouse && enabled ? Style.selectedFill : Style.hoverFill
-                opacity: enabled ? 1 : 0.45
-
-                Text {
-                  id: loginLabel
-                  anchors.centerIn: parent
-                  text: root.loginBusy ? "Logging in…" : "Log in"
-                  color: Color.accent
-                  font.family: root.contentFontFamily
-                  font.pixelSize: Style.font.body
-                  font.bold: true
-                }
-
-                MouseArea {
-                  id: loginMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: parent.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                  onClicked: if (parent.enabled) root.doLogin()
-                }
+              Text {
+                id: acctSetupText
+                anchors.left: parent.left
+                anchors.right: acctCopyLabel.left
+                anchors.top: parent.top
+                anchors.margins: Style.space(8)
+                wrapMode: Text.WrapAnywhere
+                textFormat: Text.PlainText
+                color: root.contentForeground
+                font.family: "monospace"
+                font.pixelSize: Style.font.caption
+                text: Model.accountSetupHint()
               }
 
-              Rectangle {
-                width: (parent.width - Style.spacing.sm) / 2
-                implicitHeight: cancelLabel.implicitHeight + Style.space(14)
-                radius: Style.cornerRadius
-                color: cancelMouse.containsMouse ? Style.selectedFill : Style.hoverFill
+              Text {
+                id: acctCopyLabel
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(8)
+                text: root.copied ? "Copied" : "Copy"
+                color: root.copied ? Color.accent : (acctCopyMouse.containsMouse ? root.contentForeground : Color.muted)
+                font.family: root.contentFontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: root.copied
+              }
 
-                Text {
-                  id: cancelLabel
-                  anchors.centerIn: parent
-                  text: "Cancel"
-                  color: root.contentForeground
-                  font.family: root.contentFontFamily
-                  font.pixelSize: Style.font.body
-                }
-
-                MouseArea {
-                  id: cancelMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: { phraseField.text = ""; root.loggingIn = false }
-                }
+              MouseArea {
+                id: acctCopyMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.copyCommand(Model.accountSetupHint())
               }
             }
 
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              text: "Entered here and passed straight to nym-vpnd via the nym-vpnc CLI, which stores it locally. It never leaves your machine, touches the clipboard, or hits a log. The CLI only accepts the phrase as a command argument, so it is briefly visible to other processes on this machine (same user or root) while login runs."
+              text: "Replace <your recovery phrase> with your 12–24 word phrase. The plugin never handles the phrase itself — the CLI accepts it only as a command argument, so entering it in your own terminal keeps that brief exposure under your control."
               color: Color.muted
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.caption
