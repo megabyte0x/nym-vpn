@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "megabyte0x",
   "license": "MIT",
-  "description": "Control NymVPN from the Omarchy bar: live tunnel status, one-click connect/disconnect, 5-hop mixnet vs 2-hop WireGuard mode, and entry/exit country selection via the nym-vpnc CLI.",
+  "description": "Control NymVPN from the Omarchy bar: live tunnel status, one-click connect/disconnect, 5-hop mixnet vs 2-hop WireGuard mode, and searchable flag-labelled entry/exit country pickers. A front-end for the official nym-vpnc CLI \u2014 setup: install the nym-vpnc CLI + nym-vpnd daemon and log in from a terminal (the plugin never handles your recovery phrase); full steps in the README.",
   "kinds": [
     "bar-widget"
   ],

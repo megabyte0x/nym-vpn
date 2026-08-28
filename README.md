@@ -10,7 +10,13 @@ The plugin **only detects and controls an already-configured account**. It never
 asks for or handles your recovery phrase — you log in yourself with the official
 CLI in a terminal (see [Logging in](#logging-in)).
 
-![status glyph in the bar](preview.png)
+![NymVPN control panel: connected, Anonymous 5-hop mode, Switzerland entry /
+Japan exit region pickers](preview.png)
+
+> **Setup in four steps:** (1) install the `nym-vpnc` CLI + `nym-vpnd` daemon,
+> (2) start the daemon, (3) add the plugin, (4) log in from a terminal. Full
+> commands are in [Installation](#installation) below, and the panel shows a
+> copy-paste card for whichever step is still outstanding.
 
 ## Requirements
 
