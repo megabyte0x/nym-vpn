@@ -15,7 +15,13 @@ Panel {
   property var hostWidget: null
   readonly property var barIdentity: hostWidget || root
 
-  readonly property color contentForeground: bar ? bar.barForeground : Color.foreground
+  // Panel content sits on the opaque popup surface, so it must track the THEME
+  // foreground (bar.foreground / Color.bar.text), not bar.barForeground.
+  // barForeground is the wallpaper-contrast color the transparent bar computes
+  // via omarchy-bar-text-color; over a light wallpaper it flips to the dark
+  // contrast color and would render panel text invisible against the dark
+  // popup background. Use it for bar chrome only.
+  readonly property color contentForeground: bar ? bar.foreground : Color.foreground
   readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
 
   // All live state + CLI interaction lives in the process-wide NymService
