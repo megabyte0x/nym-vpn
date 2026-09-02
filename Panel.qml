@@ -33,6 +33,9 @@ Panel {
   readonly property bool accountFetched: Nym.NymService.accountFetched
   readonly property var twoHop: Nym.NymService.twoHop
   readonly property var gateway: Nym.NymService.gateway
+  readonly property var lanAllow: Nym.NymService.lanAllow
+  readonly property string tailscaleRoute: Nym.NymService.tailscaleRoute
+  readonly property bool tailscaleCaptured: Nym.NymService.tailscaleCaptured
   readonly property var entryOptions: Nym.NymService.entryOptions
   readonly property var exitOptions: Nym.NymService.exitOptions
   readonly property string notice: Nym.NymService.notice
@@ -99,6 +102,8 @@ Panel {
   function doDisconnect() { Nym.NymService.disconnect() }
   function doForget() { Nym.NymService.forget() }
   function setMode(twoHopOn) { Nym.NymService.setMode(twoHopOn) }
+  function setLan(allow) { Nym.NymService.setLan(allow) }
+  function fixTailscale() { Nym.NymService.fixTailscale() }
   function applyGateway(role, value) { Nym.NymService.applyGateway(role, value) }
 
   Timer {
@@ -369,6 +374,129 @@ Panel {
                 }
               }
             }
+          }
+        }
+
+        // Local network access. nym-vpnd blocks LAN traffic by default, which
+        // breaks printers, casting, file sharing and clipboard-continuity tools
+        // on your own network while the tunnel is up.
+        Column {
+          width: parent.width
+          spacing: Style.spacing.sm
+          visible: root.installed && !root.daemonDown
+
+          Text {
+            text: "Local network"
+            color: Color.muted
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Row {
+            width: parent.width
+            spacing: Style.spacing.sm
+
+            Repeater {
+              model: [
+                { label: "Allow LAN", allow: true },
+                { label: "Block LAN", allow: false }
+              ]
+
+              Rectangle {
+                required property var modelData
+                readonly property bool selected: root.lanAllow === modelData.allow
+                width: (column.width - Style.spacing.sm) / 2
+                implicitHeight: lanOptionLabel.implicitHeight + Style.space(12)
+                radius: Style.cornerRadius
+                color: selected ? Style.selectedFill : (lanMouse.containsMouse ? Style.hoverFill : "transparent")
+                border.width: 1
+                border.color: selected ? Color.accent : Style.hoverFill
+                opacity: root.actionBusy ? 0.5 : 1
+
+                Text {
+                  id: lanOptionLabel
+                  anchors.centerIn: parent
+                  width: parent.width - Style.space(8)
+                  horizontalAlignment: Text.AlignHCenter
+                  elide: Text.ElideRight
+                  text: modelData.label
+                  color: parent.selected ? root.contentForeground : Color.muted
+                  font.family: root.contentFontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: parent.selected
+                }
+
+                MouseArea {
+                  id: lanMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: if (!root.actionBusy) root.setLan(modelData.allow)
+                }
+              }
+            }
+          }
+
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            visible: root.lanAllow === true
+            text: "Devices on your own network (printers, shared drives, clipboard sync) stay reachable. Everything else still goes through the tunnel."
+            color: Color.muted
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        // Tailscale coexistence. NymVPN's routing rule outranks Tailscale's, so
+        // peers become unreachable while the tunnel is up. Detected with an
+        // unprivileged probe; repaired on demand via pkexec.
+        Column {
+          width: parent.width
+          spacing: Style.spacing.sm
+          visible: root.installed && !root.daemonDown && root.tailscaleCaptured
+
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: "Tailscale traffic is being captured by NymVPN — your tailnet peers are unreachable. Restore Tailscale's routing (asks for your password); other traffic keeps using the tunnel."
+            color: Color.urgent
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Rectangle {
+            width: parent.width
+            implicitHeight: tsFixLabel.implicitHeight + Style.space(14)
+            radius: Style.cornerRadius
+            color: tsFixMouse.containsMouse ? Style.selectedFill : Style.hoverFill
+
+            Text {
+              id: tsFixLabel
+              anchors.centerIn: parent
+              text: "Restore Tailscale routing"
+              color: Color.accent
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+
+            MouseArea {
+              id: tsFixMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.fixTailscale()
+            }
+          }
+
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: "NymVPN rebuilds its routes on every connect, so this may need repeating after reconnecting."
+            color: Color.muted
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
           }
         }
 

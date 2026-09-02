@@ -147,11 +147,62 @@ system prompt; approving per action is the recommended default.
   the list: **✨ Auto (recommended)** (let NymVPN choose, excluding your own
   country) and **🎲 Random gateway**. The available countries follow the
   active mode (WireGuard gateways for Fast, mixnet gateways for Anonymous).
+- Choose **Local network**: see [LAN and Tailscale](#lan-and-tailscale).
 - Press **r** to refresh, **Esc** to close.
 
 The bar dot reflects the tunnel state: filled = connected, half = connecting /
 disconnecting, hollow = disconnected / error. Colour follows your theme accent
 (connected) or urgent (error).
+
+## LAN and Tailscale
+
+By default `nym-vpnd` sends *everything* through the tunnel and blocks your
+local network. That breaks printers, shared drives, casting and
+clipboard-continuity tools, and it makes Tailscale peers unreachable.
+
+### Local network
+
+The panel exposes the daemon's own policy as an **Allow LAN / Block LAN**
+toggle (`nym-vpnc lan get` / `lan set`). **Allow LAN** keeps devices on your own
+network reachable; all other traffic still goes through the tunnel. **Block LAN**
+is the stricter default — use it on untrusted networks.
+
+### Tailscale
+
+**Allow LAN does not cover Tailscale.** Tailscale addresses live in the CGNAT
+range `100.64.0.0/10`, which is not RFC1918 local network space. The real
+problem is routing-rule ordering: `nym-vpnd` installs a catch-all policy rule at
+preference **5209**, above the rule Tailscale installs at **5270**. Rules are
+evaluated in ascending order, so packets addressed to a tailnet peer match
+NymVPN first and get pushed into the tunnel instead of out `tailscale0`:
+
+```console
+$ ip route get 100.80.217.28
+100.80.217.28 dev tun1 table 333 ...     # captured by NymVPN
+```
+
+The panel probes for this (unprivileged, no prompt) and, when it detects the
+capture, shows **Restore Tailscale routing**. That button adds a narrow rule at
+preference **5100** — scoped to the Tailscale ranges only — via `pkexec`, so you
+get an explicit authentication prompt:
+
+```sh
+ip rule add pref 5100 to 100.64.0.0/10 lookup 52
+ip -6 rule add pref 5100 to fd7a:115c:a1e0::/48 lookup 52
+```
+
+Afterwards tailnet peers route normally while everything else stays tunnelled:
+
+```console
+$ ip route get 100.80.217.28
+100.80.217.28 dev tailscale0 table 52 ...
+$ curl -s https://api.ipify.org
+92.223.62.202                            # still the NymVPN exit
+```
+
+NymVPN rebuilds its routing rules on every connect, so this needs repeating
+after reconnecting — the probe re-detects it and the button reappears. The
+plugin never installs a passwordless polkit rule or a background root helper.
 
 ## Configure
 

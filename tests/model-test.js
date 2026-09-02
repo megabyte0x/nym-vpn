@@ -242,4 +242,101 @@ test("gatewaySummary renders a friendly route line", () => {
   assert.ok(M.gatewaySummary({ entry: "Auto { }", exit: "Auto { }" }).includes("Auto"))
 })
 
+// --- local network policy (LAN) ---
+
+test("lanGetCommand reads the daemon's local network policy", () => {
+  const c = M.lanGetCommand()
+  assert.deepStrictEqual(c.slice(0, 2), ["sh", "-c"])
+  assert.ok(c[2].includes("nym-vpnc lan get"))
+  assert.ok(c[2].includes("2>&1"))
+})
+
+test("setLanCommand maps a boolean onto the allow/block argument", () => {
+  assert.ok(M.setLanCommand(true)[2].includes("nym-vpnc lan set allow"))
+  assert.ok(M.setLanCommand(false)[2].includes("nym-vpnc lan set block"))
+})
+
+test("parseLan reads 'Local network policy: allow|block'", () => {
+  assert.strictEqual(M.parseLan("Local network policy: allow"), true)
+  assert.strictEqual(M.parseLan("Local network policy: block"), false)
+  assert.strictEqual(M.parseLan("Local Network Policy:  BLOCK \n"), false)
+})
+
+test("parseLan returns null when the answer is not a policy line", () => {
+  assert.strictEqual(M.parseLan(""), null)
+  assert.strictEqual(M.parseLan("error: transport error"), null)
+})
+
+test("lanLabel describes the policy for the panel", () => {
+  assert.ok(M.lanLabel(true).toLowerCase().includes("allow"))
+  assert.ok(M.lanLabel(false).toLowerCase().includes("block"))
+  assert.ok(M.lanLabel(null).toLowerCase().includes("unknown"))
+})
+
+// --- Tailscale route capture detection + repair ---
+
+test("tailscaleRouteCommand probes a Tailscale address, not the tunnel", () => {
+  const c = M.tailscaleRouteCommand()
+  assert.deepStrictEqual(c.slice(0, 2), ["sh", "-c"])
+  // Probes the always-present MagicDNS address inside the Tailscale CGNAT
+  // range and reports which interface the kernel picked.
+  assert.ok(c[2].includes("100.100.100.100"))
+  assert.ok(c[2].includes("tailscale0"))
+  assert.ok(c[2].includes("ip route get"))
+  // Detection must never need privileges.
+  assert.ok(!c[2].includes("pkexec"))
+  assert.ok(!c[2].includes("sudo"))
+})
+
+test("parseTailscaleRoute classifies the probe's verdict", () => {
+  assert.strictEqual(M.parseTailscaleRoute("absent"), "absent")
+  assert.strictEqual(M.parseTailscaleRoute("ok\n"), "ok")
+  assert.strictEqual(M.parseTailscaleRoute("captured"), "captured")
+  assert.strictEqual(M.parseTailscaleRoute(""), "unknown")
+  assert.strictEqual(M.parseTailscaleRoute("ip: command not found"), "unknown")
+})
+
+test("tailscaleCaptured is true only for the captured verdict", () => {
+  assert.strictEqual(M.tailscaleCaptured("captured"), true)
+  assert.strictEqual(M.tailscaleCaptured("ok"), false)
+  assert.strictEqual(M.tailscaleCaptured("absent"), false)
+  assert.strictEqual(M.tailscaleCaptured("unknown"), false)
+})
+
+test("tailscaleFixScript restores Tailscale's rule above NymVPN's", () => {
+  const s = M.tailscaleFixScript()
+  assert.strictEqual(typeof s, "string")
+  // NymVPN installs its catch-all policy rule at pref 5209; ours must sort
+  // before it, and Tailscale's routes live in table 52.
+  assert.ok(M.TAILSCALE_RULE_PREF < 5209)
+  assert.ok(s.includes(String(M.TAILSCALE_RULE_PREF)))
+  assert.ok(s.includes("100.64.0.0/10"))
+  assert.ok(s.includes("lookup 52"))
+  // IPv6 half of the Tailscale range must be handled too.
+  assert.ok(s.includes("fd7a:115c:a1e0::/48"))
+  assert.ok(s.includes("ip -6 rule"))
+})
+
+test("tailscaleFixScript is idempotent: it deletes before adding", () => {
+  const s = M.tailscaleFixScript()
+  assert.ok(s.indexOf("rule del") >= 0)
+  assert.ok(s.indexOf("rule del") < s.indexOf("rule add"))
+  // A pre-existing rule must not make the repair fail.
+  assert.ok(s.includes("2>/dev/null"))
+})
+
+test("tailscaleFixCommand escalates via pkexec, never a silent sudo", () => {
+  const c = M.tailscaleFixCommand()
+  assert.strictEqual(c[0], "pkexec")
+  assert.ok(c.join(" ").includes("100.64.0.0/10"))
+  assert.ok(!c.join(" ").includes("sudo"))
+})
+
+test("tailscaleFixHint is the unprivileged text of the same repair", () => {
+  const hint = M.tailscaleFixHint()
+  assert.strictEqual(typeof hint, "string")
+  assert.ok(hint.startsWith("sudo "))
+  assert.ok(hint.includes("100.64.0.0/10"))
+})
+
 console.log("\n" + passed + " tests passed")

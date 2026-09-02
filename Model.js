@@ -20,6 +20,28 @@ var BAR_POLL_INTERVAL_MS = 8000
 // Two-letter ISO country codes (entry/exit gateway selection).
 var COUNTRY_PATTERN = /^[A-Za-z]{2}$/
 
+// --- Tailscale coexistence constants -------------------------------------
+// nym-vpnd installs a catch-all routing policy rule at preference 5209
+// (`not from all fwmark 0x14d lookup 333`) which sorts ABOVE the rule
+// Tailscale installs at 5270 (`from all lookup 52`). Because rules are
+// evaluated in ascending preference order, every packet addressed to a
+// Tailscale peer is matched by NymVPN first and pushed into the tunnel table
+// instead of out `tailscale0` -- so peers become unreachable while the tunnel
+// is up. `lan set allow` does NOT cover this: Tailscale addresses live in the
+// CGNAT range 100.64.0.0/10, which is not RFC1918 local network space.
+//
+// The repair is a narrow rule, scoped to the Tailscale ranges only, at a
+// preference below NymVPN's. Everything not addressed to a Tailscale peer
+// still falls through to NymVPN's rule and stays in the tunnel.
+var TAILSCALE_RULE_PREF = 5100
+var TAILSCALE_TABLE = 52
+var TAILSCALE_CGNAT4 = "100.64.0.0/10"
+var TAILSCALE_ULA6 = "fd7a:115c:a1e0::/48"
+var TAILSCALE_IFACE = "tailscale0"
+// MagicDNS address: always present in Tailscale's route table when the
+// interface is up, so it is a reliable probe target.
+var TAILSCALE_PROBE = "100.100.100.100"
+
 // ---------------------------------------------------------------------------
 // Command builders
 // ---------------------------------------------------------------------------
@@ -100,6 +122,80 @@ function accountForgetCommand() {
 
 function disconnectCommand() {
   return sh(CLI + " disconnect 2>&1")
+}
+
+// ---------------------------------------------------------------------------
+// Local network (LAN) policy
+// ---------------------------------------------------------------------------
+// nym-vpnd defaults to blocking local network access, which breaks printers,
+// casting, file sharing and clipboard-continuity tools on your own LAN while
+// the tunnel is up. The daemon exposes this as a first-class setting, so the
+// panel just surfaces it rather than touching the firewall itself.
+
+function lanGetCommand() {
+  return sh(CLI + " lan get 2>&1")
+}
+
+function setLanCommand(allow) {
+  return sh(CLI + " lan set " + (allow ? "allow" : "block") + " 2>&1")
+}
+
+// ---------------------------------------------------------------------------
+// Tailscale coexistence
+// ---------------------------------------------------------------------------
+
+// Unprivileged probe: is Tailscale up, and does a Tailscale-addressed packet
+// still leave via tailscale0? Echoes exactly one verdict token:
+//   absent   -- Tailscale is not running, nothing to do
+//   ok       -- Tailscale addresses still route out tailscale0
+//   captured -- NymVPN's policy rule is stealing Tailscale traffic
+function tailscaleRouteCommand() {
+  var script =
+    "ip link show " + TAILSCALE_IFACE + " >/dev/null 2>&1 || { echo absent; exit 0; }; " +
+    "dev=$(ip route get " + TAILSCALE_PROBE + " 2>/dev/null | " +
+    "sed -n 's/.*dev \\([^ ]*\\).*/\\1/p' | head -n1); " +
+    "[ -z \"$dev\" ] && exit 0; " +
+    "[ \"$dev\" = " + TAILSCALE_IFACE + " ] && echo ok || echo captured"
+  return sh(script)
+}
+
+function parseTailscaleRoute(raw) {
+  var v = text(raw).split("\n").pop().trim().toLowerCase()
+  if (v === "absent" || v === "ok" || v === "captured") return v
+  return "unknown"
+}
+
+function tailscaleCaptured(verdict) {
+  return text(verdict) === "captured"
+}
+
+// The repair itself. Idempotent: each rule is deleted before being re-added so
+// running it twice (or after a reconnect that left the rule intact) is safe.
+// NymVPN rebuilds its own rules on every connect, so this needs re-running
+// after each connect -- the panel detects that and offers the button again.
+function tailscaleFixScript() {
+  var pref = String(TAILSCALE_RULE_PREF)
+  var tbl = String(TAILSCALE_TABLE)
+  return [
+    "ip rule del pref " + pref + " to " + TAILSCALE_CGNAT4 + " lookup " + tbl + " 2>/dev/null || true",
+    "ip rule add pref " + pref + " to " + TAILSCALE_CGNAT4 + " lookup " + tbl,
+    "ip -6 rule del pref " + pref + " to " + TAILSCALE_ULA6 + " lookup " + tbl + " 2>/dev/null || true",
+    "ip -6 rule add pref " + pref + " to " + TAILSCALE_ULA6 + " lookup " + tbl,
+    "ip route flush cache"
+  ].join("; ")
+}
+
+// Run the repair through pkexec so the user sees an explicit, auditable
+// authentication prompt. The plugin never installs a passwordless rule and
+// never shells out to a silent `sudo`.
+function tailscaleFixCommand() {
+  return ["pkexec", "sh", "-c", tailscaleFixScript()]
+}
+
+// Copy-and-paste form of the same repair, for users who would rather run it
+// themselves in a terminal (or wire it into their own startup hook).
+function tailscaleFixHint() {
+  return "sudo sh -c " + JSON.stringify(tailscaleFixScript())
 }
 
 // Enable/disable two-hop WireGuard mode. on -> 2-hop WireGuard ("Fast"),
@@ -355,6 +451,22 @@ function parseAccount(raw) {
   }
 }
 
+// Parse `nym-vpnc lan get` output ("Local network policy: allow|block").
+// Returns true (allow), false (block), or null when the answer was not a
+// policy line at all (daemon error, empty output, older CLI without `lan`).
+function parseLan(raw) {
+  var body = text(raw).toLowerCase()
+  var m = body.match(/local\s+network\s+policy\s*:\s*(allow|block)/)
+  if (!m) return null
+  return m[1] === "allow"
+}
+
+function lanLabel(allow) {
+  if (allow === true) return "Allowed"
+  if (allow === false) return "Blocked"
+  return "Unknown"
+}
+
 // Parse `nym-vpnc tunnel get` output for the two-hop toggle.
 function parseTwoHop(raw) {
   var body = text(raw).toLowerCase()
@@ -447,6 +559,18 @@ if (typeof module !== "undefined" && module.exports) {
     parseAccount: parseAccount,
     parseTwoHop: parseTwoHop,
     parseGateway: parseGateway,
-    modeLabel: modeLabel
+    modeLabel: modeLabel,
+    lanGetCommand: lanGetCommand,
+    setLanCommand: setLanCommand,
+    parseLan: parseLan,
+    lanLabel: lanLabel,
+    TAILSCALE_RULE_PREF: TAILSCALE_RULE_PREF,
+    TAILSCALE_TABLE: TAILSCALE_TABLE,
+    tailscaleRouteCommand: tailscaleRouteCommand,
+    parseTailscaleRoute: parseTailscaleRoute,
+    tailscaleCaptured: tailscaleCaptured,
+    tailscaleFixScript: tailscaleFixScript,
+    tailscaleFixCommand: tailscaleFixCommand,
+    tailscaleFixHint: tailscaleFixHint
   }
 }
