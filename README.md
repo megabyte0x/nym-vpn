@@ -170,39 +170,66 @@ is the stricter default — use it on untrusted networks.
 ### Tailscale
 
 **Allow LAN does not cover Tailscale.** Tailscale addresses live in the CGNAT
-range `100.64.0.0/10`, which is not RFC1918 local network space. The real
-problem is routing-rule ordering: `nym-vpnd` installs a catch-all policy rule at
-preference **5209**, above the rule Tailscale installs at **5270**. Rules are
-evaluated in ascending order, so packets addressed to a tailnet peer match
-NymVPN first and get pushed into the tunnel instead of out `tailscale0`:
+range `100.64.0.0/10`, which is not RFC1918 local network space. NymVPN breaks
+Tailscale in *two* independent ways, and fixing only one leaves peers
+unreachable.
+
+**1. Routing.** `nym-vpnd` installs a catch-all policy rule at preference
+**5209**, above the rule Tailscale installs at **5270**. Rules are evaluated in
+ascending order, so packets to a tailnet peer match NymVPN first and get pushed
+into the tunnel instead of out `tailscale0`:
 
 ```console
 $ ip route get 100.80.217.28
 100.80.217.28 dev tun1 table 333 ...     # captured by NymVPN
 ```
 
-The panel probes for this (unprivileged, no prompt) and, when it detects the
-capture, shows **Restore Tailscale routing**. That button adds a narrow rule at
-preference **5100** — scoped to the Tailscale ranges only — via `pkexec`, so you
-get an explicit authentication prompt:
-
-```sh
-ip rule add pref 5100 to 100.64.0.0/10 lookup 52
-ip -6 rule add pref 5100 to fd7a:115c:a1e0::/48 lookup 52
-```
-
-Afterwards tailnet peers route normally while everything else stays tunnelled:
+**2. Firewall.** `table inet nym` chain `output` has `policy drop` and ends in a
+bare `reject`; its allow-list covers only RFC1918, link-local and multicast. So
+even correctly-routed Tailscale packets are rejected locally — which looks like
+this, and is easily mistaken for the peer refusing the connection:
 
 ```console
-$ ip route get 100.80.217.28
-100.80.217.28 dev tailscale0 table 52 ...
+$ ping 100.80.217.28
+From 100.87.56.118 icmp_seq=1 Destination Port Unreachable
+ping: sendmsg: Operation not permitted
+```
+
+That same chain carries `udp dport 53 reject` *ahead* of the LAN accepts, which
+kills MagicDNS (`100.100.100.100`) — so `ssh <peer-name>` hangs on name
+resolution even once routing is fixed.
+
+**The fix.** The panel probes for both (unprivileged, no prompt) and shows
+**Restore Tailscale access**, which applies both repairs via `pkexec`:
+
+```sh
+# routing: sort Tailscale's table ahead of NymVPN's catch-all
+ip rule add pref 5100 to 100.64.0.0/10 lookup 52
+ip -6 rule add pref 5100 to fd7a:115c:a1e0::/48 lookup 52
+
+# firewall: accept Tailscale traffic in nym's drop-policy chains.
+# `insert` (not `add`) so these land ahead of the port-53 reject.
+nft insert rule inet nym output ip daddr 100.64.0.0/10 accept comment "nymvpn-tailscale"
+nft insert rule inet nym output oifname "tailscale0"   accept comment "nymvpn-tailscale"
+nft insert rule inet nym input  ip saddr 100.64.0.0/10 accept comment "nymvpn-tailscale"
+```
+
+The comment tag makes it idempotent: a re-run drops the previous generation by
+handle instead of stacking duplicates. Afterwards tailnet peers work while
+everything else stays tunnelled:
+
+```console
+$ getent hosts home
+100.80.217.28   home.tail987709.ts.net   # MagicDNS works
+$ ping -c1 100.80.217.28
+1 packets transmitted, 1 received, 0% packet loss
 $ curl -s https://api.ipify.org
 92.223.62.202                            # still the NymVPN exit
 ```
 
-NymVPN rebuilds its routing rules on every connect, so this needs repeating
-after reconnecting — the probe re-detects it and the button reappears. The
-plugin never installs a passwordless polkit rule or a background root helper.
+NymVPN rebuilds its routes *and* firewall on every connect, so this needs
+repeating after reconnecting — the probe re-detects it and the button reappears.
+The plugin never installs a passwordless polkit rule or a background root helper.
 
 ## Configure
 

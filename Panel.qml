@@ -459,7 +459,9 @@ Panel {
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "Tailscale traffic is being captured by NymVPN — your tailnet peers are unreachable. Restore Tailscale's routing (asks for your password); other traffic keeps using the tunnel."
+            text: root.tailscaleRoute === "blocked"
+                  ? "NymVPN's firewall is rejecting Tailscale traffic — your tailnet peers and MagicDNS names are unreachable. Restore Tailscale access (asks for your password); other traffic keeps using the tunnel."
+                  : "Tailscale traffic is being captured by NymVPN — your tailnet peers are unreachable. Restore Tailscale access (asks for your password); other traffic keeps using the tunnel."
             color: Color.urgent
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.bodySmall
@@ -474,7 +476,7 @@ Panel {
             Text {
               id: tsFixLabel
               anchors.centerIn: parent
-              text: "Restore Tailscale routing"
+              text: "Restore Tailscale access"
               color: Color.accent
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.bodySmall
@@ -493,7 +495,7 @@ Panel {
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "NymVPN rebuilds its routes on every connect, so this may need repeating after reconnecting."
+            text: "NymVPN rebuilds its routes and firewall on every connect, so this may need repeating after reconnecting."
             color: Color.muted
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption

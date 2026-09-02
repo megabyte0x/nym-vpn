@@ -275,29 +275,38 @@ test("lanLabel describes the policy for the panel", () => {
 
 // --- Tailscale route capture detection + repair ---
 
-test("tailscaleRouteCommand probes a Tailscale address, not the tunnel", () => {
+test("tailscaleRouteCommand probes BOTH routing and the nym firewall", () => {
   const c = M.tailscaleRouteCommand()
   assert.deepStrictEqual(c.slice(0, 2), ["sh", "-c"])
-  // Probes the always-present MagicDNS address inside the Tailscale CGNAT
-  // range and reports which interface the kernel picked.
+  // Routing half: which interface does the kernel pick for a Tailscale addr?
   assert.ok(c[2].includes("100.100.100.100"))
   assert.ok(c[2].includes("tailscale0"))
   assert.ok(c[2].includes("ip route get"))
+  // Firewall half: correct routing is not enough -- nym's output chain has
+  // policy drop and rejects anything outside its RFC1918 allow-list, which
+  // surfaces as EPERM ("Operation not permitted") on send.
+  assert.ok(c[2].includes("ping"))
+  assert.ok(c[2].includes("not permitted"))
   // Detection must never need privileges.
   assert.ok(!c[2].includes("pkexec"))
   assert.ok(!c[2].includes("sudo"))
+  assert.ok(!c[2].includes("nft"))
 })
 
 test("parseTailscaleRoute classifies the probe's verdict", () => {
   assert.strictEqual(M.parseTailscaleRoute("absent"), "absent")
   assert.strictEqual(M.parseTailscaleRoute("ok\n"), "ok")
   assert.strictEqual(M.parseTailscaleRoute("captured"), "captured")
+  assert.strictEqual(M.parseTailscaleRoute("blocked"), "blocked")
   assert.strictEqual(M.parseTailscaleRoute(""), "unknown")
   assert.strictEqual(M.parseTailscaleRoute("ip: command not found"), "unknown")
 })
 
-test("tailscaleCaptured is true only for the captured verdict", () => {
+test("tailscaleCaptured covers misrouting AND firewall rejection", () => {
+  // Both are the same user-visible failure -- peers unreachable -- and both
+  // are repaired by the same button, so both must trigger it.
   assert.strictEqual(M.tailscaleCaptured("captured"), true)
+  assert.strictEqual(M.tailscaleCaptured("blocked"), true)
   assert.strictEqual(M.tailscaleCaptured("ok"), false)
   assert.strictEqual(M.tailscaleCaptured("absent"), false)
   assert.strictEqual(M.tailscaleCaptured("unknown"), false)
@@ -317,12 +326,36 @@ test("tailscaleFixScript restores Tailscale's rule above NymVPN's", () => {
   assert.ok(s.includes("ip -6 rule"))
 })
 
+test("tailscaleFixScript also punches through nym's drop-policy firewall", () => {
+  const s = M.tailscaleFixScript()
+  // Routing alone leaves packets rejected by `table inet nym` chain output
+  // (policy drop, RFC1918-only allow-list). Both directions need an accept.
+  assert.ok(s.includes("inet nym output"))
+  assert.ok(s.includes("inet nym input"))
+  assert.ok(s.includes("tailscale0"))
+  // Must not explode when the tunnel is down and the table does not exist.
+  assert.ok(s.includes("list table inet nym"))
+})
+
+test("tailscaleFixScript accepts Tailscale traffic BEFORE nym's DNS reject", () => {
+  const s = M.tailscaleFixScript()
+  // nym's output chain rejects all port-53 traffic that is not its own
+  // resolver, which breaks MagicDNS. `nft insert` prepends, so our accept
+  // lands ahead of that reject -- `add` would land after it and do nothing.
+  assert.ok(s.includes("nft insert rule"))
+  assert.ok(!/nft add rule/.test(s))
+})
+
 test("tailscaleFixScript is idempotent: it deletes before adding", () => {
   const s = M.tailscaleFixScript()
   assert.ok(s.indexOf("rule del") >= 0)
   assert.ok(s.indexOf("rule del") < s.indexOf("rule add"))
   // A pre-existing rule must not make the repair fail.
   assert.ok(s.includes("2>/dev/null"))
+  // nft rules are tagged with a comment so re-runs can find and drop the
+  // previous generation instead of stacking duplicates.
+  assert.ok(s.includes(M.TAILSCALE_NFT_TAG))
+  assert.ok(s.includes("delete rule inet nym"))
 })
 
 test("tailscaleFixCommand escalates via pkexec, never a silent sudo", () => {

@@ -21,19 +21,29 @@ var BAR_POLL_INTERVAL_MS = 8000
 var COUNTRY_PATTERN = /^[A-Za-z]{2}$/
 
 // --- Tailscale coexistence constants -------------------------------------
-// nym-vpnd installs a catch-all routing policy rule at preference 5209
-// (`not from all fwmark 0x14d lookup 333`) which sorts ABOVE the rule
-// Tailscale installs at 5270 (`from all lookup 52`). Because rules are
-// evaluated in ascending preference order, every packet addressed to a
-// Tailscale peer is matched by NymVPN first and pushed into the tunnel table
-// instead of out `tailscale0` -- so peers become unreachable while the tunnel
-// is up. `lan set allow` does NOT cover this: Tailscale addresses live in the
-// CGNAT range 100.64.0.0/10, which is not RFC1918 local network space.
+// NymVPN breaks Tailscale in TWO independent ways, and fixing only one leaves
+// peers unreachable. `lan set allow` fixes neither: Tailscale addresses live in
+// the CGNAT range 100.64.0.0/10, which is not RFC1918 local network space.
 //
-// The repair is a narrow rule, scoped to the Tailscale ranges only, at a
-// preference below NymVPN's. Everything not addressed to a Tailscale peer
-// still falls through to NymVPN's rule and stays in the tunnel.
+// 1. ROUTING. nym-vpnd installs a catch-all policy rule at preference 5209
+//    (`not from all fwmark 0x14d lookup 333`), above the rule Tailscale
+//    installs at 5270 (`from all lookup 52`). Rules are evaluated in ascending
+//    preference order, so packets to a peer match NymVPN first and are pushed
+//    into the tunnel table instead of out `tailscale0`.
+//
+// 2. FIREWALL. `table inet nym` chain `output` has `policy drop` and ends in a
+//    bare `reject`. Its allow-list covers only RFC1918/link-local/multicast, so
+//    even correctly-routed Tailscale packets are rejected -- observed as
+//    `ping: sendmsg: Operation not permitted`. That chain also carries
+//    `udp dport 53 reject` ahead of the LAN accepts, which kills MagicDNS
+//    (100.100.100.100) and makes `ssh <peer-name>` hang on name resolution.
+//
+// Both repairs are scoped to the Tailscale ranges/interface only; everything
+// else still falls through to NymVPN's rules and stays inside the tunnel.
 var TAILSCALE_RULE_PREF = 5100
+// Comment tag stamped on every nft rule we add, so a re-run can find and drop
+// the previous generation by handle instead of stacking duplicates.
+var TAILSCALE_NFT_TAG = "nymvpn-tailscale"
 var TAILSCALE_TABLE = 52
 var TAILSCALE_CGNAT4 = "100.64.0.0/10"
 var TAILSCALE_ULA6 = "fd7a:115c:a1e0::/48"
@@ -144,29 +154,37 @@ function setLanCommand(allow) {
 // Tailscale coexistence
 // ---------------------------------------------------------------------------
 
-// Unprivileged probe: is Tailscale up, and does a Tailscale-addressed packet
-// still leave via tailscale0? Echoes exactly one verdict token:
+// Unprivileged probe. Checks routing AND the firewall, because either alone
+// makes peers unreachable. Echoes exactly one verdict token:
 //   absent   -- Tailscale is not running, nothing to do
-//   ok       -- Tailscale addresses still route out tailscale0
-//   captured -- NymVPN's policy rule is stealing Tailscale traffic
+//   captured -- NymVPN's routing rule is stealing Tailscale traffic
+//   blocked  -- routing is fine but nym's nft output chain rejects the packets
+//   ok       -- Tailscale traffic both routes and passes the firewall
 function tailscaleRouteCommand() {
   var script =
     "ip link show " + TAILSCALE_IFACE + " >/dev/null 2>&1 || { echo absent; exit 0; }; " +
     "dev=$(ip route get " + TAILSCALE_PROBE + " 2>/dev/null | " +
     "sed -n 's/.*dev \\([^ ]*\\).*/\\1/p' | head -n1); " +
     "[ -z \"$dev\" ] && exit 0; " +
-    "[ \"$dev\" = " + TAILSCALE_IFACE + " ] && echo ok || echo captured"
+    "[ \"$dev\" = " + TAILSCALE_IFACE + " ] || { echo captured; exit 0; }; " +
+    // A rejected send fails immediately with EPERM; an allowed one either
+    // replies or simply times out. Only EPERM proves the firewall is at fault.
+    "case \"$(ping -c1 -W1 -n " + TAILSCALE_PROBE + " 2>&1)\" in " +
+    "*'not permitted'*) echo blocked;; *) echo ok;; esac"
   return sh(script)
 }
 
 function parseTailscaleRoute(raw) {
   var v = text(raw).split("\n").pop().trim().toLowerCase()
-  if (v === "absent" || v === "ok" || v === "captured") return v
+  if (v === "absent" || v === "ok" || v === "captured" || v === "blocked") return v
   return "unknown"
 }
 
+// Misrouted and firewall-rejected are the same user-visible failure and share
+// one repair, so both light up the panel's fix button.
 function tailscaleCaptured(verdict) {
-  return text(verdict) === "captured"
+  var v = text(verdict)
+  return v === "captured" || v === "blocked"
 }
 
 // The repair itself. Idempotent: each rule is deleted before being re-added so
@@ -176,13 +194,39 @@ function tailscaleCaptured(verdict) {
 function tailscaleFixScript() {
   var pref = String(TAILSCALE_RULE_PREF)
   var tbl = String(TAILSCALE_TABLE)
-  return [
+  var tag = '\\"' + TAILSCALE_NFT_TAG + '\\"'
+  var lines = [
+    // --- 1. routing: put Tailscale's table ahead of NymVPN's catch-all ---
     "ip rule del pref " + pref + " to " + TAILSCALE_CGNAT4 + " lookup " + tbl + " 2>/dev/null || true",
     "ip rule add pref " + pref + " to " + TAILSCALE_CGNAT4 + " lookup " + tbl,
     "ip -6 rule del pref " + pref + " to " + TAILSCALE_ULA6 + " lookup " + tbl + " 2>/dev/null || true",
     "ip -6 rule add pref " + pref + " to " + TAILSCALE_ULA6 + " lookup " + tbl,
-    "ip route flush cache"
-  ].join("; ")
+    "ip route flush cache",
+    // --- 2. firewall: accept Tailscale traffic in nym's drop-policy chains ---
+    // No nym table means the tunnel is down and there is nothing to punch.
+    "nft list table inet nym >/dev/null 2>&1 || exit 0",
+    // Drop any rules a previous run left behind, matched by our comment tag.
+    "for ch in output input; do " +
+    "nft -a list chain inet nym $ch 2>/dev/null " +
+    "| sed -n 's/.*" + TAILSCALE_NFT_TAG + ".*# handle \\([0-9]*\\)$/\\1/p' " +
+    "| while read -r h; do nft delete rule inet nym $ch handle \"$h\" 2>/dev/null || true; done; done"
+  ]
+  // `insert` prepends to the chain. This matters: nym's output chain rejects
+  // all port-53 traffic that is not its own resolver, so an appended rule
+  // would sit behind that reject and MagicDNS would stay broken.
+  var accepts = [
+    ["output", "ip6 daddr " + TAILSCALE_ULA6],
+    ["output", "ip daddr " + TAILSCALE_CGNAT4],
+    ["output", "oifname \\\"" + TAILSCALE_IFACE + "\\\""],
+    ["input", "ip6 saddr " + TAILSCALE_ULA6],
+    ["input", "ip saddr " + TAILSCALE_CGNAT4],
+    ["input", "iifname \\\"" + TAILSCALE_IFACE + "\\\""]
+  ]
+  for (var i = 0; i < accepts.length; i++) {
+    lines.push("nft insert rule inet nym " + accepts[i][0] + " " +
+               accepts[i][1] + " accept comment " + tag)
+  }
+  return lines.join("; ")
 }
 
 // Run the repair through pkexec so the user sees an explicit, auditable
@@ -566,6 +610,7 @@ if (typeof module !== "undefined" && module.exports) {
     lanLabel: lanLabel,
     TAILSCALE_RULE_PREF: TAILSCALE_RULE_PREF,
     TAILSCALE_TABLE: TAILSCALE_TABLE,
+    TAILSCALE_NFT_TAG: TAILSCALE_NFT_TAG,
     tailscaleRouteCommand: tailscaleRouteCommand,
     parseTailscaleRoute: parseTailscaleRoute,
     tailscaleCaptured: tailscaleCaptured,
