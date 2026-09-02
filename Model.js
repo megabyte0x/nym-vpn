@@ -181,6 +181,17 @@ function isFastest(value) {
   return text(value).toLowerCase() === "fastest"
 }
 
+// Is a newly picked selector value the one already in force? Applying a gateway
+// constraint rebuilds the tunnel, so re-picking the active row must do nothing.
+// "random" is deliberately never redundant -- picking it again means re-roll.
+function sameSelection(value, current) {
+  var v = text(value).toLowerCase()
+  var c = text(current).toLowerCase()
+  if (v === "" || c === "") return false
+  if (v === "random") return false
+  return v === c
+}
+
 // NymVPN gateway identities are base58 (no 0, O, I, l) public keys.
 function isGatewayId(value) {
   return /^[1-9A-HJ-NP-Za-km-z]{32,50}$/.test(text(value))
@@ -1087,6 +1098,7 @@ if (typeof module !== "undefined" && module.exports) {
     parseLan: parseLan,
     lanLabel: lanLabel,
     isFastest: isFastest,
+    sameSelection: sameSelection,
     localCountryCommand: localCountryCommand,
     parseLocalCountry: parseLocalCountry,
     parseGatewayHosts: parseGatewayHosts,

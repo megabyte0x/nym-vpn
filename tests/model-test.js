@@ -773,6 +773,20 @@ test("countryOptions offers Fastest alongside Auto and Random", () => {
   assert.ok(/speed|fast|latency/i.test(fastest.description + fastest.label))
 })
 
+test("sameSelection spots a redundant pick so the tunnel is not rebuilt for nothing", () => {
+  // Selecting a region while connected now rebuilds the tunnel, so re-picking
+  // what is already active must be a no-op -- otherwise merely reopening the
+  // dropdown and confirming the current row would drop the user's connection.
+  assert.strictEqual(M.sameSelection("auto", "auto"), true)
+  assert.strictEqual(M.sameSelection("IN", "in"), true)
+  assert.strictEqual(M.sameSelection("IN", "SG"), false)
+  assert.strictEqual(M.sameSelection("auto", "IN"), false)
+  // "Random" means "roll again", so it is never redundant.
+  assert.strictEqual(M.sameSelection("random", "random"), false)
+  // Unknown current selection (nothing configured yet) must still apply.
+  assert.strictEqual(M.sameSelection("IN", ""), false)
+})
+
 test("setGatewayCommand refuses 'fastest' because it must be resolved first", () => {
   // "fastest" is not a daemon-side constraint; it is resolved by probing and
   // then applied as a concrete country. Building a bogus flag would silently

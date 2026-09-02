@@ -167,6 +167,10 @@ Singleton {
       svc.resolveFastest(role)
       return
     }
+    // Re-picking the row that is already active must not rebuild the tunnel.
+    var current = role === "exit" ? svc.exitSelection : svc.entrySelection
+    if (Model.sameSelection(value, current)) return
+
     var command = Model.setGatewayCommand(role, value)
     if (!command) return
     // A gateway constraint only binds a NEWLY built tunnel. Without this the
