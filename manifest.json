@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.megabyte0x.nym-vpn",
   "name": "NymVPN",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "megabyte0x",
   "license": "MIT",
-  "description": "Control NymVPN from the Omarchy bar: live tunnel status, one-click connect/disconnect, 5-hop mixnet vs 2-hop WireGuard mode, and searchable flag-labelled entry/exit country pickers. A front-end for the official nym-vpnc CLI \u2014 setup: install the nym-vpnc CLI + nym-vpnd daemon and log in from a terminal (the plugin never handles your recovery phrase); full steps in the README.",
+  "description": "Control NymVPN from the Omarchy bar: live tunnel status, one-click connect/disconnect, 5-hop mixnet vs 2-hop WireGuard mode, LAN access toggle, and searchable flag-labelled entry/exit country pickers with an optional measured \"Fastest\" mode that pings nearby gateways and pins the lowest-latency route. A front-end for the official nym-vpnc CLI — setup: install the nym-vpnc CLI + nym-vpnd daemon and log in from a terminal (the plugin never handles your recovery phrase); full steps in the README.",
   "kinds": [
     "bar-widget"
   ],
