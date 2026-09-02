@@ -456,6 +456,44 @@ function parseGateway(raw) {
   }
 }
 
+// Pull the gateway identities the tunnel is ACTUALLY using out of `status`.
+//
+// This matters because a `gateway set` constraint only applies to a NEWLY built
+// tunnel: change the region while connected and the daemon keeps routing over
+// the old gateways. Reading the live route is what keeps the panel honest --
+// otherwise it shows "Auto (excluding your country)" while the user is still
+// connected through a gateway in their own country.
+function parseStatusGateways(raw) {
+  var body = text(raw)
+  var re = /\[([1-9A-HJ-NP-Za-km-z]{32,50})\]/g
+  var ids = []
+  var m
+  while ((m = re.exec(body)) !== null) ids.push(m[1])
+  return {
+    entry: ids.length > 0 ? ids[0] : "",
+    exit: ids.length > 1 ? ids[1] : ""
+  }
+}
+
+// Countries of the live route, or empty strings when no tunnel is up / the
+// gateways are not in the known pool.
+function liveRoute(statusRaw, hosts) {
+  var ids = parseStatusGateways(statusRaw)
+  return {
+    entry: countryForGatewayId(ids.entry, hosts),
+    exit: countryForGatewayId(ids.exit, hosts)
+  }
+}
+
+// One-line summary of the route in use, or "" when there is nothing live to
+// report (caller then falls back to the configured constraint).
+function liveRouteSummary(statusRaw, hosts) {
+  var r = liveRoute(statusRaw, hosts)
+  if (r.entry === "" || r.exit === "") return ""
+  return countryFlag(r.entry) + " " + countryName(r.entry) +
+         "  \u2192  " + countryFlag(r.exit) + " " + countryName(r.exit)
+}
+
 // Pull a pinned gateway key out of `gateway get` output, which reports
 // `Gateway { identity: NodeIdentity { key: "<base58>" } }` once a specific node
 // has been pinned with --entry-id/--exit-id.
@@ -963,6 +1001,20 @@ function pickFastest(results, opts) {
   }
 }
 
+// Fastest optimises for latency, and the lowest-latency entry is very often a
+// gateway in the user's OWN country -- exactly what Auto's exclude_user_country
+// default avoids. Say so at the moment it happens rather than letting the user
+// discover their own country sitting in the entry slot and conclude that Auto
+// is broken.
+function homeCountryNotice(result, localCc) {
+  var r = result || {}
+  var home = text(localCc).toUpperCase()
+  if (home === "" || text(r.entry).toUpperCase() !== home) return ""
+  return "Fastest chose " + countryName(home) + " \u2014 your own country \u2014 as the entry, " +
+         "because it is the lowest latency. That is the speed/privacy tradeoff Auto avoids: " +
+         "switch the entry back to Auto to exclude your jurisdiction."
+}
+
 // One-line description of a resolved Fastest route for the panel.
 function fastestSummary(result) {
   var r = result || {}
@@ -1018,6 +1070,9 @@ if (typeof module !== "undefined" && module.exports) {
     countryOptions: countryOptions,
     gatewaySelection: gatewaySelection,
     parseGatewayIdentity: parseGatewayIdentity,
+    parseStatusGateways: parseStatusGateways,
+    liveRoute: liveRoute,
+    liveRouteSummary: liveRouteSummary,
     countryForGatewayId: countryForGatewayId,
     gatewaySummary: gatewaySummary,
     parseStatus: parseStatus,
@@ -1043,6 +1098,7 @@ if (typeof module !== "undefined" && module.exports) {
     canProbe: canProbe,
     probeSkipReason: probeSkipReason,
     countryDistanceKm: countryDistanceKm,
-    fastestSummary: fastestSummary
+    fastestSummary: fastestSummary,
+    homeCountryNotice: homeCountryNotice
   }
 }

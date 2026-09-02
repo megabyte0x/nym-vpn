@@ -151,6 +151,11 @@ system prompt; approving per action is the recommended default.
   for Fast, mixnet gateways for Anonymous).
 - Choose **Local network**: see [Local network access](#local-network-access).
 - Use **Re-test** under the region pickers to measure again at any time.
+- The **Servers** line always reports the route the tunnel is *actually* using,
+  not just the stored setting. Changing a region while connected rebuilds the
+  tunnel so the new selection really takes effect — otherwise the daemon would
+  keep routing over the old gateways and the panel would describe a route you
+  were not on.
 - Press **r** to refresh, **Esc** to close.
 
 The bar dot reflects the tunnel state: filled = connected, half = connecting /
@@ -218,7 +223,8 @@ Two deliberate behaviours are worth knowing:
 - **Auto is left exactly as it was.** Fastest often puts the *entry* hop in your
   own country, which is precisely what Auto's `exclude_user_country` default
   avoids. That is a real privacy tradeoff, so it is an explicit, separate
-  choice — never a silent redefinition of Auto.
+  choice — never a silent redefinition of Auto, and the panel says so
+  whenever the measured winner turns out to be your own country.
 - **You must be disconnected to measure.** While the tunnel is up, the
   killswitch routes *every* packet through it, so a ping to a gateway actually
   travels entry → exit → target: the ranking would describe the *exit's*

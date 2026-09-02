@@ -239,6 +239,35 @@ test("gatewaySelection collapses raw points to selector values", () => {
   assert.strictEqual(M.gatewaySelection(""), "")
 })
 
+test("parseStatusGateways reads the gateways the tunnel is ACTUALLY using", () => {
+  // A gateway constraint only takes effect on a NEW tunnel. Reading the live
+  // route from `status` is what stops the panel claiming "Auto (excluding your
+  // country)" while the user is still connected through their own country.
+  const raw = "State: Connected wg to 217.217.251.116:51822 " +
+    "[528Ui84hipYbnFA4ZBJqcex99kT6pgkRxs5jpEczcbHa] \u2192 160.30.5.58:51822 " +
+    "[BKch6LUUTR9nU7AZZgGwiukasfJ4pFMuPJL95exCMpCR]"
+  assert.deepStrictEqual(M.parseStatusGateways(raw), {
+    entry: "528Ui84hipYbnFA4ZBJqcex99kT6pgkRxs5jpEczcbHa",
+    exit: "BKch6LUUTR9nU7AZZgGwiukasfJ4pFMuPJL95exCMpCR"
+  })
+  assert.deepStrictEqual(M.parseStatusGateways("State: Disconnected"), { entry: "", exit: "" })
+  assert.deepStrictEqual(M.parseStatusGateways(""), { entry: "", exit: "" })
+})
+
+test("liveRouteSummary names the countries actually in use", () => {
+  const hosts = M.parseGatewayHosts(WG_LIST)
+  const raw = "State: Connected wg to 1.2.3.4:51822 " +
+    "[528Ui84hipYbnFA4ZBJqcex99kT6pgkRxs5jpEczcbHa] \u2192 5.6.7.8:51822 " +
+    "[2BDCzDG2ykdykTKRB8XVsEekHftv7oQ3TUrzsDxTWaxs]"
+  const s = M.liveRouteSummary(raw, hosts)
+  assert.ok(s.includes("India"), s)
+  assert.ok(s.includes("Singapore"), s)
+  // Nothing to report when no tunnel is up: caller falls back to the config.
+  assert.strictEqual(M.liveRouteSummary("State: Disconnected", hosts), "")
+  // Unknown gateways must not be invented.
+  assert.strictEqual(M.liveRouteSummary(raw, []), "")
+})
+
 test("parseGatewayIdentity reads a pinned gateway key", () => {
   const raw = 'Gateway { identity: NodeIdentity { key: "2BDCzDG2ykdykTKRB8XVsEekHftv7oQ3TUrzsDxTWaxs" } }'
   assert.strictEqual(M.parseGatewayIdentity(raw), "2BDCzDG2ykdykTKRB8XVsEekHftv7oQ3TUrzsDxTWaxs")
@@ -757,6 +786,20 @@ test("isFastest recognises the selector token", () => {
   assert.strictEqual(M.isFastest("FASTEST"), true)
   assert.strictEqual(M.isFastest("auto"), false)
   assert.strictEqual(M.isFastest(""), false)
+})
+
+test("homeCountryNotice warns when the fastest entry is your own country", () => {
+  // Auto's whole privacy promise is "excluding your country". Fastest can and
+  // often does pick your own country as the entry, because that is genuinely
+  // the lowest latency -- so it must say so plainly instead of leaving the user
+  // to notice their own country sitting in the entry slot.
+  const n = M.homeCountryNotice({ entry: "IN", exit: "SG", measured: true }, "IN")
+  assert.ok(/India/.test(n), n)
+  assert.ok(/auto/i.test(n), n)
+  // No warning when the entry is elsewhere, or when we do not know where you are.
+  assert.strictEqual(M.homeCountryNotice({ entry: "SG", exit: "MY" }, "IN"), "")
+  assert.strictEqual(M.homeCountryNotice({ entry: "IN", exit: "SG" }, ""), "")
+  assert.strictEqual(M.homeCountryNotice(null, "IN"), "")
 })
 
 test("fastestSummary describes the measured route for the panel", () => {

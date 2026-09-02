@@ -50,7 +50,15 @@ Singleton {
   readonly property var exitHosts: Model.parseGatewayHosts(svc.gatewayRaw[svc.exitType] || "")
   readonly property string entrySelection: Model.gatewaySelection(svc.gateway.entry, svc.entryHosts)
   readonly property string exitSelection: Model.gatewaySelection(svc.gateway.exit, svc.exitHosts)
-  readonly property string routeSummary: Model.gatewaySummary(svc.gateway, svc.entryHosts, svc.exitHosts)
+  // Raw `status` text, kept so we can read the gateways the tunnel is ACTUALLY
+  // using rather than only the constraint the daemon has stored.
+  property string statusRaw: ""
+  readonly property string liveSummary: Model.liveRouteSummary(svc.statusRaw, svc.entryHosts)
+  // Prefer the live route: a constraint that has not been applied to a tunnel
+  // yet must never be presented as if it were in force.
+  readonly property string routeSummary: svc.liveSummary !== ""
+    ? svc.liveSummary
+    : Model.gatewaySummary(svc.gateway, svc.entryHosts, svc.exitHosts)
   property string notice: ""
 
   // --- Fastest (measured) gateway selection --------------------------------
@@ -161,6 +169,12 @@ Singleton {
     }
     var command = Model.setGatewayCommand(role, value)
     if (!command) return
+    // A gateway constraint only binds a NEWLY built tunnel. Without this the
+    // daemon keeps routing over the old gateways, so the panel would report the
+    // new selection (e.g. "Auto, excluding your country") while the user is
+    // still connected through the previous one -- possibly in their own
+    // country. Rebuild the tunnel so the selection is actually true.
+    svc.pendingReconnect = svc.status.state === "connected"
     svc.runAction(command)
   }
 
@@ -247,6 +261,9 @@ Singleton {
   // a tunnel is already up so the change actually takes effect.
   function fastestApply(pick) {
     svc.fastestResult = pick
+    // Be explicit when the measured winner is the user's own country: that is
+    // precisely the privacy default Auto provides and Fastest gives up.
+    svc.fastestNotice = Model.homeCountryNotice(pick, svc.localCountry)
     var role = svc.fastestRole
     svc.fastestBusy = false
     svc.fastestRole = ""
@@ -309,7 +326,8 @@ Singleton {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        svc.status = Model.parseStatus(String(text || ""), 0)
+        svc.statusRaw = String(text || "")
+        svc.status = Model.parseStatus(svc.statusRaw, 0)
         if (svc.status.state === "auth-required") {
           svc.authFree = false
           svc.polkitGated = true      // stop background polling; on-demand only
