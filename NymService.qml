@@ -34,10 +34,6 @@ Singleton {
   // Local network policy from `nym-vpnc lan get`: true=allow, false=block,
   // null=not yet known (or a daemon/CLI too old to answer).
   property var lanAllow: null
-  // Verdict of the unprivileged Tailscale route probe:
-  // "absent" | "ok" | "captured" | "unknown". See Model.tailscaleRouteCommand.
-  property string tailscaleRoute: "unknown"
-  readonly property bool tailscaleCaptured: Model.tailscaleCaptured(svc.tailscaleRoute)
   // Available gateway countries per pool ("mixnet-entry"|"mixnet-exit"|"wg").
   property var countryCodes: ({})
   readonly property string entryType: Model.entryGatewayType(svc.twoHop)
@@ -92,14 +88,6 @@ Singleton {
       lanProc.command = Model.lanGetCommand()
       lanProc.running = true
     }
-    svc.refreshTailscale()
-  }
-
-  // Unprivileged, prompt-free probe -- safe to run on every refresh.
-  function refreshTailscale() {
-    if (tailscaleProc.running) return
-    tailscaleProc.command = Model.tailscaleRouteCommand()
-    tailscaleProc.running = true
   }
 
   function ensureCountries(type) {
@@ -136,17 +124,6 @@ Singleton {
   function setLan(allow) {
     if (svc.lanAllow === allow) return
     svc.runAction(Model.setLanCommand(allow))
-  }
-
-  // Re-assert Tailscale's routing rule above NymVPN's. Privileged, so it goes
-  // through pkexec and the user sees an explicit authentication prompt.
-  // NymVPN rebuilds its rules on every connect, so this may be needed again
-  // after reconnecting -- the probe re-detects that and the panel re-offers it.
-  function fixTailscale() {
-    if (fixProc.running) return
-    svc.notice = ""
-    fixProc.command = Model.tailscaleFixCommand()
-    fixProc.running = true
   }
 
   function applyGateway(role, value) {
@@ -231,32 +208,6 @@ Singleton {
   }
 
   Process {
-    id: tailscaleProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: svc.tailscaleRoute = Model.parseTailscaleRoute(String(text || ""))
-    }
-  }
-
-  // pkexec repair. On cancel/timeout the exit code is non-zero and the probe
-  // simply keeps reporting "captured", so the panel re-offers the button.
-  Process {
-    id: fixProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var out = String(text || "").trim()
-        if (out !== "") svc.notice = out.split("\n").slice(-1)[0]
-      }
-    }
-    onExited: function(code) {
-      if (code !== 0 && svc.notice === "")
-        svc.notice = "Tailscale routing fix was not authorised"
-      settleTimer.restart()
-    }
-  }
-
-  Process {
     id: listProc
     property string pendingType: ""
     stdout: StdioCollector {
@@ -298,11 +249,6 @@ Singleton {
       if (svc.authFree) svc.refreshAccount()
     }
   }
-
-  // NymVPN reinstalls its routing rules on every (re)connect, which silently
-  // re-captures Tailscale traffic. Re-probe whenever the tunnel state changes
-  // so a stale "fixed" reading never hides a freshly broken route.
-  onStatusChanged: svc.refreshTailscale()
 
   // Background live poll of the ungated `status` read. Suspended the moment a
   // daemon proves it gates reads behind polkit (polkitGated), so prompt-gated

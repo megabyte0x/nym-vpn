@@ -147,89 +147,28 @@ system prompt; approving per action is the recommended default.
   the list: **✨ Auto (recommended)** (let NymVPN choose, excluding your own
   country) and **🎲 Random gateway**. The available countries follow the
   active mode (WireGuard gateways for Fast, mixnet gateways for Anonymous).
-- Choose **Local network**: see [LAN and Tailscale](#lan-and-tailscale).
+- Choose **Local network**: see [Local network access](#local-network-access).
 - Press **r** to refresh, **Esc** to close.
 
 The bar dot reflects the tunnel state: filled = connected, half = connecting /
 disconnecting, hollow = disconnected / error. Colour follows your theme accent
 (connected) or urgent (error).
 
-## LAN and Tailscale
+## Local network access
 
 By default `nym-vpnd` sends *everything* through the tunnel and blocks your
 local network. That breaks printers, shared drives, casting and
-clipboard-continuity tools, and it makes Tailscale peers unreachable.
-
-### Local network
+clipboard-continuity tools while you are connected.
 
 The panel exposes the daemon's own policy as an **Allow LAN / Block LAN**
-toggle (`nym-vpnc lan get` / `lan set`). **Allow LAN** keeps devices on your own
-network reachable; all other traffic still goes through the tunnel. **Block LAN**
-is the stricter default — use it on untrusted networks.
+toggle (`nym-vpnc lan get` / `nym-vpnc lan set`):
 
-### Tailscale
+- **Allow LAN** keeps devices on your own network reachable. All other traffic
+  still goes through the tunnel.
+- **Block LAN** is the stricter default — prefer it on untrusted networks.
 
-**Allow LAN does not cover Tailscale.** Tailscale addresses live in the CGNAT
-range `100.64.0.0/10`, which is not RFC1918 local network space. NymVPN breaks
-Tailscale in *two* independent ways, and fixing only one leaves peers
-unreachable.
-
-**1. Routing.** `nym-vpnd` installs a catch-all policy rule at preference
-**5209**, above the rule Tailscale installs at **5270**. Rules are evaluated in
-ascending order, so packets to a tailnet peer match NymVPN first and get pushed
-into the tunnel instead of out `tailscale0`:
-
-```console
-$ ip route get 100.80.217.28
-100.80.217.28 dev tun1 table 333 ...     # captured by NymVPN
-```
-
-**2. Firewall.** `table inet nym` chain `output` has `policy drop` and ends in a
-bare `reject`; its allow-list covers only RFC1918, link-local and multicast. So
-even correctly-routed Tailscale packets are rejected locally — which looks like
-this, and is easily mistaken for the peer refusing the connection:
-
-```console
-$ ping 100.80.217.28
-From 100.87.56.118 icmp_seq=1 Destination Port Unreachable
-ping: sendmsg: Operation not permitted
-```
-
-That same chain carries `udp dport 53 reject` *ahead* of the LAN accepts, which
-kills MagicDNS (`100.100.100.100`) — so `ssh <peer-name>` hangs on name
-resolution even once routing is fixed.
-
-**The fix.** The panel probes for both (unprivileged, no prompt) and shows
-**Restore Tailscale access**, which applies both repairs via `pkexec`:
-
-```sh
-# routing: sort Tailscale's table ahead of NymVPN's catch-all
-ip rule add pref 5100 to 100.64.0.0/10 lookup 52
-ip -6 rule add pref 5100 to fd7a:115c:a1e0::/48 lookup 52
-
-# firewall: accept Tailscale traffic in nym's drop-policy chains.
-# `insert` (not `add`) so these land ahead of the port-53 reject.
-nft insert rule inet nym output ip daddr 100.64.0.0/10 accept comment "nymvpn-tailscale"
-nft insert rule inet nym output oifname "tailscale0"   accept comment "nymvpn-tailscale"
-nft insert rule inet nym input  ip saddr 100.64.0.0/10 accept comment "nymvpn-tailscale"
-```
-
-The comment tag makes it idempotent: a re-run drops the previous generation by
-handle instead of stacking duplicates. Afterwards tailnet peers work while
-everything else stays tunnelled:
-
-```console
-$ getent hosts home
-100.80.217.28   home.tail987709.ts.net   # MagicDNS works
-$ ping -c1 100.80.217.28
-1 packets transmitted, 1 received, 0% packet loss
-$ curl -s https://api.ipify.org
-92.223.62.202                            # still the NymVPN exit
-```
-
-NymVPN rebuilds its routes *and* firewall on every connect, so this needs
-repeating after reconnecting — the probe re-detects it and the button reappears.
-The plugin never installs a passwordless polkit rule or a background root helper.
+This covers your local network only — the daemon's allow-list is RFC1918,
+link-local and multicast. Addresses outside those ranges stay in the tunnel.
 
 ## Configure
 

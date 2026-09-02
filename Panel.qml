@@ -34,8 +34,6 @@ Panel {
   readonly property var twoHop: Nym.NymService.twoHop
   readonly property var gateway: Nym.NymService.gateway
   readonly property var lanAllow: Nym.NymService.lanAllow
-  readonly property string tailscaleRoute: Nym.NymService.tailscaleRoute
-  readonly property bool tailscaleCaptured: Nym.NymService.tailscaleCaptured
   readonly property var entryOptions: Nym.NymService.entryOptions
   readonly property var exitOptions: Nym.NymService.exitOptions
   readonly property string notice: Nym.NymService.notice
@@ -103,7 +101,6 @@ Panel {
   function doForget() { Nym.NymService.forget() }
   function setMode(twoHopOn) { Nym.NymService.setMode(twoHopOn) }
   function setLan(allow) { Nym.NymService.setLan(allow) }
-  function fixTailscale() { Nym.NymService.fixTailscale() }
   function applyGateway(role, value) { Nym.NymService.applyGateway(role, value) }
 
   Timer {
@@ -442,60 +439,6 @@ Panel {
             wrapMode: Text.WordWrap
             visible: root.lanAllow === true
             text: "Devices on your own network (printers, shared drives, clipboard sync) stay reachable. Everything else still goes through the tunnel."
-            color: Color.muted
-            font.family: root.contentFontFamily
-            font.pixelSize: Style.font.caption
-          }
-        }
-
-        // Tailscale coexistence. NymVPN's routing rule outranks Tailscale's, so
-        // peers become unreachable while the tunnel is up. Detected with an
-        // unprivileged probe; repaired on demand via pkexec.
-        Column {
-          width: parent.width
-          spacing: Style.spacing.sm
-          visible: root.installed && !root.daemonDown && root.tailscaleCaptured
-
-          Text {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: root.tailscaleRoute === "blocked"
-                  ? "NymVPN's firewall is rejecting Tailscale traffic — your tailnet peers and MagicDNS names are unreachable. Restore Tailscale access (asks for your password); other traffic keeps using the tunnel."
-                  : "Tailscale traffic is being captured by NymVPN — your tailnet peers are unreachable. Restore Tailscale access (asks for your password); other traffic keeps using the tunnel."
-            color: Color.urgent
-            font.family: root.contentFontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-
-          Rectangle {
-            width: parent.width
-            implicitHeight: tsFixLabel.implicitHeight + Style.space(14)
-            radius: Style.cornerRadius
-            color: tsFixMouse.containsMouse ? Style.selectedFill : Style.hoverFill
-
-            Text {
-              id: tsFixLabel
-              anchors.centerIn: parent
-              text: "Restore Tailscale access"
-              color: Color.accent
-              font.family: root.contentFontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.bold: true
-            }
-
-            MouseArea {
-              id: tsFixMouse
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.fixTailscale()
-            }
-          }
-
-          Text {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: "NymVPN rebuilds its routes and firewall on every connect, so this may need repeating after reconnecting."
             color: Color.muted
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption
