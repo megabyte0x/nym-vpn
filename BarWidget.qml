@@ -76,6 +76,11 @@ BarWidget {
     target: "io.github.megabyte0x.nym-vpn"
 
     function refresh(): void { root.refresh() }
+    // Resolve the measured-fastest route without opening the panel, so it can
+    // be bound to a key or scripted ("make my VPN fast"). No-op while the
+    // tunnel is up, where latency cannot be measured honestly -- see
+    // NymService.resolveFastest.
+    function fastest(): void { Nym.NymService.resolveFastest("both") }
     function open(): void { root.open() }
     function close(): void { root.close() }
     function show(): void { root.open() }

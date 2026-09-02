@@ -207,6 +207,12 @@ side:
 Measured on the same connection, the resolved route ran at **75 ms / 10.9 MB/s**
 and **13–16 MB/s** on a later run — roughly **5× the throughput** of Auto.
 
+You can also resolve it without opening the panel — handy for a keybind:
+
+```sh
+qs -p "$OMARCHY_PATH/shell" ipc call io.github.megabyte0x.nym-vpn fastest
+```
+
 Two deliberate behaviours are worth knowing:
 
 - **Auto is left exactly as it was.** Fastest often puts the *entry* hop in your
