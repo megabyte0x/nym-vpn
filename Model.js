@@ -456,12 +456,42 @@ function parseGateway(raw) {
   }
 }
 
+// Pull a pinned gateway key out of `gateway get` output, which reports
+// `Gateway { identity: NodeIdentity { key: "<base58>" } }` once a specific node
+// has been pinned with --entry-id/--exit-id.
+function parseGatewayIdentity(pointStr) {
+  var s = text(pointStr)
+  var m = s.match(/key:\s*"([1-9A-HJ-NP-Za-km-z]{32,50})"/)
+  if (m) return m[1]
+  m = s.match(/identity:\s*"([1-9A-HJ-NP-Za-km-z]{32,50})"/)
+  return m ? m[1] : ""
+}
+
+// Which country does a pinned gateway live in? Needs the pool's host table
+// (from parseGatewayHosts) because the key alone carries no location.
+function countryForGatewayId(id, hosts) {
+  var key = text(id)
+  if (!isGatewayId(key)) return ""
+  var list = Array.isArray(hosts) ? hosts : []
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && text(list[i].id) === key) return text(list[i].cc).toUpperCase()
+  }
+  return ""
+}
+
 // Collapse a raw entry/exit point string ("Country(US)", "Location { .. }",
-// "Auto { .. }") into the selector value the picker uses: a 2-letter code, or
-// "auto" when NymVPN is auto-selecting. Returns "" when nothing is set yet.
-function gatewaySelection(pointStr) {
+// "Auto { .. }", or a pinned "Gateway { identity: ... }") into the selector
+// value the picker uses: a 2-letter code, or "auto" when NymVPN is
+// auto-selecting. Returns "" when nothing is set yet.
+//
+// Pass the pool's host table to resolve a PINNED gateway back to its country --
+// otherwise a pinned route would fall through and render as "Auto", telling the
+// user the opposite of what is configured.
+function gatewaySelection(pointStr, hosts) {
   var s = text(pointStr)
   if (s === "") return ""
+  var pinned = parseGatewayIdentity(s)
+  if (pinned !== "") return countryForGatewayId(pinned, hosts)
   var m = s.match(/\b([A-Z]{2})\b/)
   if (m && countryName(m[1]) !== m[1]) return m[1]
   // Fall back: any 2-letter token in parentheses, e.g. Country(xx).
@@ -472,10 +502,10 @@ function gatewaySelection(pointStr) {
 }
 
 // One-line, human summary of the current route for the section header.
-function gatewaySummary(gateway) {
+function gatewaySummary(gateway, entryHosts, exitHosts) {
   var g = gateway || {}
-  var e = gatewaySelection(g.entry)
-  var x = gatewaySelection(g.exit)
+  var e = gatewaySelection(g.entry, entryHosts)
+  var x = gatewaySelection(g.exit, exitHosts)
   function pretty(v) {
     if (v === "" ) return "Auto"
     if (v === "auto") return "Auto"
@@ -987,6 +1017,8 @@ if (typeof module !== "undefined" && module.exports) {
     parseGatewayCountries: parseGatewayCountries,
     countryOptions: countryOptions,
     gatewaySelection: gatewaySelection,
+    parseGatewayIdentity: parseGatewayIdentity,
+    countryForGatewayId: countryForGatewayId,
     gatewaySummary: gatewaySummary,
     parseStatus: parseStatus,
     stateColorRole: stateColorRole,

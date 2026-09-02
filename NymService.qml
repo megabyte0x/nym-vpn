@@ -43,6 +43,14 @@ Singleton {
   readonly property string exitType: Model.exitGatewayType(svc.twoHop)
   readonly property var entryOptions: Model.countryOptions(svc.countryCodes[svc.entryType] || [])
   readonly property var exitOptions: Model.countryOptions(svc.countryCodes[svc.exitType] || [])
+  // Gateway tables for the active pools, used to resolve a PINNED gateway key
+  // back to its country: `gateway get` reports an opaque identity once a node
+  // has been pinned, which would otherwise render as "Auto" in the pickers.
+  readonly property var entryHosts: Model.parseGatewayHosts(svc.gatewayRaw[svc.entryType] || "")
+  readonly property var exitHosts: Model.parseGatewayHosts(svc.gatewayRaw[svc.exitType] || "")
+  readonly property string entrySelection: Model.gatewaySelection(svc.gateway.entry, svc.entryHosts)
+  readonly property string exitSelection: Model.gatewaySelection(svc.gateway.exit, svc.exitHosts)
+  readonly property string routeSummary: Model.gatewaySummary(svc.gateway, svc.entryHosts, svc.exitHosts)
   property string notice: ""
 
   // --- Fastest (measured) gateway selection --------------------------------
@@ -260,7 +268,7 @@ Singleton {
     } else if (role === "exit") {
       // Keep the hops in different countries when we can: take the best
       // measured country that is not already the entry.
-      var entryCc = Model.gatewaySelection(svc.gateway.entry)
+      var entryCc = svc.entrySelection
       var exitCc = pick.exit
       var exitId = pick.exitId
       var ranked = pick.ranked || []

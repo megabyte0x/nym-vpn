@@ -239,6 +239,39 @@ test("gatewaySelection collapses raw points to selector values", () => {
   assert.strictEqual(M.gatewaySelection(""), "")
 })
 
+test("parseGatewayIdentity reads a pinned gateway key", () => {
+  const raw = 'Gateway { identity: NodeIdentity { key: "2BDCzDG2ykdykTKRB8XVsEekHftv7oQ3TUrzsDxTWaxs" } }'
+  assert.strictEqual(M.parseGatewayIdentity(raw), "2BDCzDG2ykdykTKRB8XVsEekHftv7oQ3TUrzsDxTWaxs")
+  assert.strictEqual(M.parseGatewayIdentity("Country(US)"), "")
+  assert.strictEqual(M.parseGatewayIdentity(""), "")
+})
+
+test("gatewaySelection resolves a pinned gateway back to its country", () => {
+  // Pinning by --entry-id makes `gateway get` report an opaque key. Without
+  // resolving it the picker would show "Auto (recommended)" for a route that is
+  // in fact pinned to a specific node -- actively misleading.
+  const hosts = M.parseGatewayHosts(WG_LIST)
+  const pinned = 'Gateway { identity: NodeIdentity { key: "2BDCzDG2ykdykTKRB8XVsEekHftv7oQ3TUrzsDxTWaxs" } }'
+  assert.strictEqual(M.gatewaySelection(pinned, hosts), "SG")
+  // Unknown key (gateway left the pool) must not masquerade as Auto.
+  const unknown = 'Gateway { identity: NodeIdentity { key: "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz" } }'
+  assert.strictEqual(M.gatewaySelection(unknown, hosts), "")
+  // Existing behaviour is unchanged when no host table is supplied.
+  assert.strictEqual(M.gatewaySelection("Country(US)"), "US")
+  assert.strictEqual(M.gatewaySelection("Auto { }"), "auto")
+})
+
+test("gatewaySummary names the pinned countries", () => {
+  const hosts = M.parseGatewayHosts(WG_LIST)
+  const s = M.gatewaySummary({
+    entry: 'Gateway { identity: NodeIdentity { key: "528Ui84hipYbnFA4ZBJqcex99kT6pgkRxs5jpEczcbHa" } }',
+    exit: 'Gateway { identity: NodeIdentity { key: "2BDCzDG2ykdykTKRB8XVsEekHftv7oQ3TUrzsDxTWaxs" } }'
+  }, hosts, hosts)
+  assert.ok(s.includes("India"), s)
+  assert.ok(s.includes("Singapore"), s)
+  assert.ok(!s.includes("Auto"), s)
+})
+
 test("gatewaySummary renders a friendly route line", () => {
   const s = M.gatewaySummary({ entry: "Country(US)", exit: "Country(DE)" })
   assert.ok(s.includes("United States"))

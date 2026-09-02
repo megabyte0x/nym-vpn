@@ -461,7 +461,7 @@ Panel {
           Text {
             width: parent.width
             elide: Text.ElideRight
-            text: "Servers  ·  " + Model.gatewaySummary(root.gateway)
+            text: "Servers  ·  " + Nym.NymService.routeSummary
             color: Color.muted
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.caption
@@ -476,7 +476,7 @@ Panel {
             emptyText: root.entryOptions.length <= 3 ? "Loading regions…" : "No matches"
             triggerLabel: "Auto (recommended)"
             options: root.entryOptions
-            value: Model.gatewaySelection(root.gateway.entry)
+            value: Nym.NymService.entrySelection
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
             onChanged: function(v) { root.applyGateway("entry", v) }
@@ -491,7 +491,7 @@ Panel {
             emptyText: root.exitOptions.length <= 3 ? "Loading regions…" : "No matches"
             triggerLabel: "Auto (recommended)"
             options: root.exitOptions
-            value: Model.gatewaySelection(root.gateway.exit)
+            value: Nym.NymService.exitSelection
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
             onChanged: function(v) { root.applyGateway("exit", v) }
