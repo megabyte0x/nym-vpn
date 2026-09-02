@@ -143,11 +143,14 @@ system prompt; approving per action is the recommended default.
 - Pick your **Entry region** and **Exit region** from the two dropdowns. Each
   opens a searchable list of the countries NymVPN currently has gateways in,
   shown with a flag and full name — just type to filter (by name or code) and
-  click to select; the choice is applied immediately. Two smart options lead
+  click to select; the choice is applied immediately. Three smart options lead
   the list: **✨ Auto (recommended)** (let NymVPN choose, excluding your own
-  country) and **🎲 Random gateway**. The available countries follow the
-  active mode (WireGuard gateways for Fast, mixnet gateways for Anonymous).
+  country), **⚡ Fastest (measured)** (see [Fastest
+  regions](#fastest-regions-why-nymvpn-can-feel-slow)) and **🎲 Random
+  gateway**. The available countries follow the active mode (WireGuard gateways
+  for Fast, mixnet gateways for Anonymous).
 - Choose **Local network**: see [Local network access](#local-network-access).
+- Use **Re-test** under the region pickers to measure again at any time.
 - Press **r** to refresh, **Esc** to close.
 
 The bar dot reflects the tunnel state: filled = connected, half = connecting /
@@ -181,6 +184,47 @@ omarchy bar move io.github.megabyte0x.nym-vpn --section right
 ```sh
 omarchy plugin remove io.github.megabyte0x.nym-vpn
 ```
+
+## Fastest regions (why NymVPN can feel slow)
+
+NymVPN's own **Auto** selection scores gateways by load and uptime, but it is
+**latency- and geography-blind** — and it deliberately excludes your own
+country for privacy. Measured from India, Auto routed entry **Dubai [AE]** →
+exit **Baku [AZ]**: **474 ms RTT, 3.0 MB/s**, while idle gateways sat in Mumbai
+and Singapore. Latency throttles single-stream TCP, so this is usually what
+"NymVPN is slow" actually means.
+
+**⚡ Fastest (measured)** in either region dropdown fixes that from the client
+side:
+
+1. works out roughly where you are (timezone, falling back to your locale),
+2. shortlists the nearest countries that actually have gateways, by
+   great-circle distance,
+3. **pings** a couple of healthy gateways in each, concurrently (~1.5 s),
+4. applies the winners — pinning the exact measured nodes with
+   `--entry-id` / `--exit-id`.
+
+Measured on the same connection, the resolved route ran at **75 ms / 10.9 MB/s**
+and **13–16 MB/s** on a later run — roughly **5× the throughput** of Auto.
+
+Two deliberate behaviours are worth knowing:
+
+- **Auto is left exactly as it was.** Fastest often puts the *entry* hop in your
+  own country, which is precisely what Auto's `exclude_user_country` default
+  avoids. That is a real privacy tradeoff, so it is an explicit, separate
+  choice — never a silent redefinition of Auto.
+- **You must be disconnected to measure.** While the tunnel is up, the
+  killswitch routes *every* packet through it, so a ping to a gateway actually
+  travels entry → exit → target: the ranking would describe the *exit's*
+  neighbours, not yours (a probe from a Singapore exit rated Cambodia at 275 ms
+  and gateways in the user's own country at 443 ms). Selecting Fastest while
+  connected therefore changes **nothing** and tells you to disconnect first,
+  rather than applying a guess and rebuilding your tunnel for it.
+
+Pinning the exact node matters too: constraining only the *country* leaves the
+daemon free to re-roll inside it, which produced an exit at 390 ms / 2.5 MB/s
+while a probed node in that same country answered in 43 ms. When nothing could
+be measured, the plugin falls back to a plain country constraint instead.
 
 ## Develop
 

@@ -53,8 +53,11 @@ change Auto's semantics** — add an explicit, clearly-labelled *Fastest* option
      by `parseGatewayCountries`). Cap at ~6 candidate countries.
    - **Latency probe:** for each candidate country pick 1–2 High-performance
      gateway exit IPs from `gateway list` and `ping -c 2 -W 1` them concurrently
-     via Quickshell Process. Through-tunnel offset is constant, so *relative*
-     ordering is valid even while connected; when disconnected probes are direct.
+     (Implemented as ONE `sh` process that fans out with `&`/`wait` and reduces
+     each ping to a short, pipe-atomic `RTT <CC> <IP> <ms>` line — simpler and
+     cheaper than N Quickshell Processes; ~1.5 s for ten hosts.)
+     ~~Through-tunnel offset is constant, so relative ordering is valid even
+     while connected~~ — **false, see Corrections.**
    - **Apply:** best country → `gateway set --entry-country <best>`; exit = best
      country whose probe is fastest excluding (configurably) the entry country →
      `gateway set --exit-country <bestExit>`; then `reconnect` if connected.

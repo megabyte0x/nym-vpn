@@ -550,9 +550,13 @@ test("canProbe is true when traffic still leaves the real interface", () => {
   assert.strictEqual(M.canProbe("unknown"), true)
 })
 
-test("probeSkipReason explains why a connected probe is refused", () => {
+test("probeSkipReason explains the refusal and promises no change", () => {
   const why = M.probeSkipReason("connected")
   assert.ok(/disconnect/i.test(why), why)
+  // The user asked for the MEASURED fastest route. Applying an unmeasured
+  // guess would rebuild the tunnel and could replace an already-measured,
+  // better selection, so the resolve must be a no-op and say so.
+  assert.ok(/nothing was changed/i.test(why), why)
   assert.strictEqual(M.probeSkipReason("disconnected"), "")
 })
 

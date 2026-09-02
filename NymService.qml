@@ -204,9 +204,15 @@ Singleton {
     // 4. Measure -- but only when the answer would mean anything. With the
     // tunnel up, every probe egresses from the exit gateway, so the ranking
     // would describe the exit's neighbourhood, not the user's.
+    //
+    // In that case we STOP rather than apply a geographic guess: the user asked
+    // for the measured route, and applying an unmeasured one would rebuild the
+    // tunnel and could downgrade an already-measured selection. Explain instead.
     if (!Model.canProbe(svc.status.state)) {
       svc.fastestNotice = Model.probeSkipReason(svc.status.state)
-      svc.fastestApply(Model.pickFastest([], { fallbackOrder: plan.countries }))
+      svc.fastestBusy = false
+      svc.fastestRole = ""
+      svc.fastestPlan = null
       return
     }
     var cmd = Model.probeCommand(plan)

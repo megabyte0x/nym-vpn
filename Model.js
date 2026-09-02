@@ -823,7 +823,10 @@ function canProbe(state) {
 
 function probeSkipReason(state) {
   if (canProbe(state)) return ""
-  return "Disconnect to measure real latency \u2014 while connected every probe is routed through the tunnel. Picked the closest regions instead."
+  // We deliberately do NOT apply an unmeasured guess here: the user asked for
+  // the MEASURED fastest route, and applying a guess would both rebuild the
+  // tunnel and potentially replace an already-measured, better selection.
+  return "Disconnect first to measure real latency \u2014 while the tunnel is up every probe is routed through it, so the result would rank the exit's neighbours, not yours. Nothing was changed."
 }
 
 // Parse the probe output. Unreachable hosts come back as rtt null -- never 0,
