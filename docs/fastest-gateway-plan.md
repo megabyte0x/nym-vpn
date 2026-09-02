@@ -1,4 +1,7 @@
-# Why NYM feels slow on "Auto" + plan for a "Fastest" selection mode
+# Why NYM feels slow on "Auto" + the "Fastest" selection mode
+
+> **Status: implemented and verified.** Four assumptions in this plan turned out
+> to be wrong and were corrected on evidence — see **Corrections** below.
 
 ## Root-cause analysis (verified 2026-09-02, from India / Asia-Kolkata)
 
@@ -94,18 +97,76 @@ change Auto's semantics** — add an explicit, clearly-labelled *Fastest* option
 - Keep 0 qmllint errors; theme-role colors only (matches existing conventions).
 
 **Phase 4 — Verification (superpowers:verification-before-completion)**
-- All model tests pass (currently 37; expect ~50).
-- Manual: from Auto→Fastest, verify `gateway get` shows chosen countries, RTT and
-  cloudflare speed test improve vs Auto baseline, and public IP = exit country.
-- Reconnect churn check: toggling panel open/closed does not re-trigger probing.
+- All model tests pass — **89** (was 37).
+- Manual: from Auto→Fastest, `gateway get` shows the chosen nodes, RTT and the
+  Cloudflare speed test improve vs the Auto baseline, and the public IP is the
+  exit country. ✅ (see the table below)
+- Reconnect churn: opening/closing the panel only calls `refreshAll()`; probing
+  runs solely from an explicit Fastest selection or **Re-test**. Verified by
+  opening the panel repeatedly with the tunnel up — no probe, no gateway change.
+- Live panel screenshot shows `Servers · 🇮🇳 India → 🇲🇾 Malaysia` with both
+  pickers naming the pinned regions; the live service exposes the
+  `⚡ Fastest (measured)` row in both dropdowns (72 options).
 
 ### Out of scope
 - Changing daemon Auto behaviour (upstream nym-vpnd feature request material:
   latency-aware auto selection; consider filing on nymtech/nym-vpn-client).
 - Continuous background re-probing (battery + reconnect churn).
 
-## Current live state (left in place)
+## Corrections forced by evidence during implementation
 
-`gateway set --entry-country IN --exit-country SG` is now active and connected
-(82 ms / 13 MB/s). To restore the previous privacy-default:
+**1. "Relative ordering is valid even while connected" — FALSE.**
+With the killswitch up, every probe egresses from the *exit* gateway, so the
+offset is not constant, it is path-dependent. Measured on a live IN→SG tunnel:
+Cambodia 275 ms and Malaysia 268 ms "beat" gateways in the user's own country at
+443–588 ms — the ranking described Singapore's neighbourhood, not India's, and
+acting on it would have picked a Cambodian entry for a user in Mumbai.
+→ `canProbe(state)` refuses to measure while connected/connecting. Rather than
+apply an unmeasured geographic guess (which would rebuild the tunnel and could
+replace an already-measured, better selection), the resolve is a **no-op** and
+the panel explains why.
+
+**2. Country-level selection is NOT enough.**
+The plan assumed picking the best *region* was the fix. After constraining to
+entry IN / exit SG, the daemon re-rolled inside SG and chose a node delivering
+**390 ms / 2.5 MB/s**, while a gateway probed in that same country answered in
+**43 ms**. Region selection merely narrows the daemon's blind pick.
+→ Measured winners are pinned exactly with `--entry-id` / `--exit-id`
+(`setGatewaysCommand`); a country constraint remains the fallback when nothing
+was measured, because then there is no evidence to pin.
+
+**3. Pinning broke the region display.**
+Once a node is pinned, `gateway get` reports
+`Gateway { identity: NodeIdentity { key: ... } }`. `gatewaySelection` had no
+branch for that shape, so both pickers showed **"Auto (recommended)"** for a
+route pinned to two specific nodes — the opposite of the truth. Found by
+screenshotting the live panel, not by any test. Pinned keys are now resolved
+back to their country through the pool table the service already keeps.
+
+**4. Hand-written region adjacency was biased.**
+The first implementation bucketed countries into regions and round-robined them;
+within a bucket the order was effectively alphabetical, which shortlisted
+*Indonesia* over *Singapore* for an Indian user. Replaced with true great-circle
+distance over a country-centroid table.
+
+## Verification (evidence)
+
+| Route | How chosen | RTT | Download |
+|---|---|---|---|
+| AE → AZ | daemon `Auto` | 474 ms | 3.0 MB/s |
+| IN → SG (country only) | measured region, node re-rolled by daemon | 255–390 ms | 2.5–6.1 MB/s |
+| IN → SG (pinned) | measured + `--entry-id/--exit-id` | **75 ms** | **10.9 MB/s** |
+| IN → MY (pinned) | measured + `--entry-id/--exit-id` | 86–252 ms | **13.2–16.0 MB/s** |
+
+The real `NymService.qml` was driven in a standalone Quickshell harness (not a
+Node mirror): disconnected → detects `IN`, probes in ~1.3 s, resolves
+`IN → SG/MY` with `measured=true`, and writes the pinned IDs to the daemon;
+connected → refuses, sets the notice, and leaves `gateway get` byte-identical.
+`qmllint` reports 0 errors and `omarchy plugin validate .` passes.
+
+## Current live state
+
+The daemon is pinned to the measured winners (`IN → MY`) and connected; the
+public IP resolves to the pinned exit's country, so the tunnel is intact and not
+leaking. To restore the stock privacy default at any time:
 `nym-vpnc gateway set --entry-auto-exclude-jurisdiction on --exit-auto-exclude-jurisdiction on`
