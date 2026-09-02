@@ -36,11 +36,30 @@ Singleton {
   property var lanAllow: null
   // Available gateway countries per pool ("mixnet-entry"|"mixnet-exit"|"wg").
   property var countryCodes: ({})
+  // Raw `gateway list` output per pool, kept so the Fastest resolver can read
+  // per-gateway exit IPs (the country list alone is not enough to ping).
+  property var gatewayRaw: ({})
   readonly property string entryType: Model.entryGatewayType(svc.twoHop)
   readonly property string exitType: Model.exitGatewayType(svc.twoHop)
   readonly property var entryOptions: Model.countryOptions(svc.countryCodes[svc.entryType] || [])
   readonly property var exitOptions: Model.countryOptions(svc.countryCodes[svc.exitType] || [])
   property string notice: ""
+
+  // --- Fastest (measured) gateway selection --------------------------------
+  // The daemon's own Auto is latency-blind, so "Fastest" resolves a concrete
+  // country client-side: detect roughly where the user is, shortlist the
+  // nearest countries that actually have gateways, ping a couple in each, then
+  // apply the winners as --entry-country/--exit-country. See Model.js.
+  property bool fastestBusy: false
+  // "entry" | "exit" | "both" -- which hop(s) the in-flight resolve will apply.
+  property string fastestRole: ""
+  // Last resolved route: { entry, exit, entryRtt, exitRtt, measured, ranked }.
+  property var fastestResult: null
+  // Set when the tunnel was up and a real measurement was impossible.
+  property string fastestNotice: ""
+  // Cached local country ("IN"), "" when undetectable. Detected once.
+  property string localCountry: ""
+  property bool localCountryFetched: false
 
   // True once the daemon answered `status` without a polkit prompt. When true
   // we may auto-fetch the account and poll in the background.
@@ -127,10 +146,142 @@ Singleton {
   }
 
   function applyGateway(role, value) {
+    // "Fastest" is not a daemon constraint: resolve it by measurement first.
+    if (Model.isFastest(value)) {
+      svc.resolveFastest(role)
+      return
+    }
     var command = Model.setGatewayCommand(role, value)
     if (!command) return
     svc.runAction(command)
   }
+
+  // Kick off a Fastest resolve for one hop ("entry"/"exit") or both.
+  // Idempotent while one is already in flight.
+  function resolveFastest(role) {
+    if (svc.fastestBusy || svc.actionBusy) return
+    var r = String(role || "both")
+    if (r !== "entry" && r !== "exit") r = "both"
+    svc.fastestRole = r
+    svc.fastestBusy = true
+    svc.fastestNotice = ""
+    svc.notice = ""
+    svc.fastestStep()
+  }
+
+  // Drive the resolve forward. Called again as each dependency lands, so the
+  // whole thing is a small state machine rather than nested callbacks.
+  function fastestStep() {
+    if (!svc.fastestBusy) return
+
+    // 1. Where is the user? (timezone, then locale -- both offline.)
+    if (!svc.localCountryFetched) {
+      if (!localeProc.running) {
+        localeProc.command = Model.localCountryCommand()
+        localeProc.running = true
+      }
+      return
+    }
+
+    // 2. Which gateways exist for the pool backing this hop?
+    var type = svc.fastestRole === "exit" ? svc.exitType : svc.entryType
+    var raw = svc.gatewayRaw[type]
+    if (!raw) {
+      svc.ensureCountries(type)   // also stores the raw table
+      if (!listProc.running) svc.fastestFail("Could not read the gateway list.")
+      return
+    }
+
+    // 3. Plan the probe.
+    var hosts = Model.parseGatewayHosts(raw)
+    var plan = Model.probePlan(svc.localCountry, hosts)
+    if (!plan.hosts || plan.hosts.length === 0) {
+      svc.fastestFail("No gateways available to measure.")
+      return
+    }
+    svc.fastestPlan = plan
+
+    // 4. Measure -- but only when the answer would mean anything. With the
+    // tunnel up, every probe egresses from the exit gateway, so the ranking
+    // would describe the exit's neighbourhood, not the user's.
+    if (!Model.canProbe(svc.status.state)) {
+      svc.fastestNotice = Model.probeSkipReason(svc.status.state)
+      svc.fastestApply(Model.pickFastest([], { fallbackOrder: plan.countries }))
+      return
+    }
+    var cmd = Model.probeCommand(plan)
+    if (!cmd) {
+      svc.fastestApply(Model.pickFastest([], { fallbackOrder: plan.countries }))
+      return
+    }
+    if (!probeProc.running) {
+      probeProc.command = cmd
+      probeProc.running = true
+    }
+  }
+
+  property var fastestPlan: null
+
+  function fastestFail(message) {
+    svc.fastestBusy = false
+    svc.fastestRole = ""
+    svc.fastestPlan = null
+    svc.notice = message
+  }
+
+  // Apply a resolved route to the hop(s) the user asked for, then reconnect if
+  // a tunnel is already up so the change actually takes effect.
+  function fastestApply(pick) {
+    svc.fastestResult = pick
+    var role = svc.fastestRole
+    svc.fastestBusy = false
+    svc.fastestRole = ""
+    svc.fastestPlan = null
+
+    if (!pick || (pick.entry === "" && pick.exit === "")) {
+      svc.notice = "Could not work out a fastest region."
+      return
+    }
+
+    // Pin the exact measured gateway when we have one; a bare country lets the
+    // daemon re-roll inside that country by its own latency-blind score (which
+    // measured 390ms / 2.5 MB/s on an SG node while a probed SG node answered
+    // in 43ms). Without a measurement there is no evidence to pin, so we set
+    // the more robust country constraint instead.
+    var command = null
+    if (role === "entry") {
+      command = Model.setGatewaysCommand({ entry: pick.entry, entryId: pick.entryId })
+    } else if (role === "exit") {
+      // Keep the hops in different countries when we can: take the best
+      // measured country that is not already the entry.
+      var entryCc = Model.gatewaySelection(svc.gateway.entry)
+      var exitCc = pick.exit
+      var exitId = pick.exitId
+      var ranked = pick.ranked || []
+      for (var i = 0; i < ranked.length; i++) {
+        if (ranked[i].cc !== entryCc) {
+          exitCc = ranked[i].cc
+          exitId = ranked[i].id || ""
+          break
+        }
+      }
+      command = Model.setGatewaysCommand({ exit: exitCc, exitId: exitId })
+    } else {
+      command = Model.setGatewaysCommand({
+        entry: pick.entry, entryId: pick.entryId,
+        exit: pick.exit, exitId: pick.exitId
+      })
+    }
+    if (!command) {
+      svc.notice = "Could not apply the fastest region."
+      return
+    }
+    svc.pendingReconnect = svc.status.state === "connected"
+    svc.runAction(command)
+  }
+
+  // Set when a gateway change needs the tunnel rebuilt to take effect.
+  property bool pendingReconnect: false
 
   function forget() {
     svc.runAction(Model.accountForgetCommand())
@@ -213,17 +364,58 @@ Singleton {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var codes = Model.parseGatewayCountries(String(text || ""))
+        var body = String(text || "")
+        var codes = Model.parseGatewayCountries(body)
         if (listProc.pendingType !== "" && codes.length > 0) {
           var next = Object.assign({}, svc.countryCodes)
           next[listProc.pendingType] = codes
           svc.countryCodes = next
+          // Keep the raw table too: the Fastest resolver needs the per-gateway
+          // exit IPs, which the country list throws away.
+          var raws = Object.assign({}, svc.gatewayRaw)
+          raws[listProc.pendingType] = body
+          svc.gatewayRaw = raws
         }
       }
     }
     onExited: {
       listProc.pendingType = ""
       svc.refreshCountries()
+      if (svc.fastestBusy) svc.fastestStep()
+    }
+  }
+
+  // One-shot local-country detection (timezone, then locale).
+  Process {
+    id: localeProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: svc.localCountry = Model.parseLocalCountry(String(text || ""))
+    }
+    onExited: {
+      svc.localCountryFetched = true
+      if (svc.fastestBusy) svc.fastestStep()
+    }
+  }
+
+  // Concurrent latency probe. One process; the script fans out with `&`/`wait`
+  // and reduces each ping to a single short line, so a six-country probe costs
+  // about one ping round (measured ~1.6s for ten hosts).
+  Process {
+    id: probeProc
+    property string collected: ""
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: probeProc.collected = String(text || "")
+    }
+    onExited: {
+      if (!svc.fastestBusy) return
+      // Pass the plan so each result is rejoined with its gateway identity and
+      // the winner can be pinned by --entry-id/--exit-id.
+      var results = Model.parseProbeResults(probeProc.collected, svc.fastestPlan)
+      var fallback = svc.fastestPlan ? svc.fastestPlan.countries : []
+      probeProc.collected = ""
+      svc.fastestApply(Model.pickFastest(results, { fallbackOrder: fallback }))
     }
   }
 
@@ -236,7 +428,23 @@ Singleton {
         if (out !== "") svc.notice = out.split("\n").slice(-1)[0]
       }
     }
-    onExited: function(code) { settleTimer.restart() }
+    onExited: function(code) {
+      // A gateway constraint only takes effect on a fresh tunnel, so rebuild it
+      // when we changed one while connected.
+      if (svc.pendingReconnect) {
+        svc.pendingReconnect = false
+        reconnectTimer.restart()
+      }
+      settleTimer.restart()
+    }
+  }
+
+  // Small gap so the daemon has committed the new constraint before we ask it
+  // to rebuild the tunnel.
+  Timer {
+    id: reconnectTimer
+    interval: 400
+    onTriggered: svc.runAction(Model.reconnectCommand())
   }
 
   // Re-read state shortly after an action so Connect/Disconnect visibly settle.

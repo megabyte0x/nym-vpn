@@ -38,6 +38,10 @@ Panel {
   readonly property var exitOptions: Nym.NymService.exitOptions
   readonly property string notice: Nym.NymService.notice
   readonly property bool loggedIn: Nym.NymService.loggedIn
+  // "Fastest" (measured) region selection state.
+  readonly property bool fastestBusy: Nym.NymService.fastestBusy
+  readonly property var fastestResult: Nym.NymService.fastestResult
+  readonly property string fastestNotice: Nym.NymService.fastestNotice
   property bool copied: false
 
   // The remediation command shown in the setup card (install / start daemon).
@@ -102,6 +106,7 @@ Panel {
   function setMode(twoHopOn) { Nym.NymService.setMode(twoHopOn) }
   function setLan(allow) { Nym.NymService.setLan(allow) }
   function applyGateway(role, value) { Nym.NymService.applyGateway(role, value) }
+  function resolveFastest(role) { Nym.NymService.resolveFastest(role) }
 
   Timer {
     id: copiedTimer
@@ -468,7 +473,7 @@ Panel {
             width: parent.width
             label: "Entry region"
             placeholderText: "Search a country…"
-            emptyText: root.entryOptions.length <= 2 ? "Loading regions…" : "No matches"
+            emptyText: root.entryOptions.length <= 3 ? "Loading regions…" : "No matches"
             triggerLabel: "Auto (recommended)"
             options: root.entryOptions
             value: Model.gatewaySelection(root.gateway.entry)
@@ -483,13 +488,72 @@ Panel {
             width: parent.width
             label: "Exit region"
             placeholderText: "Search a country…"
-            emptyText: root.exitOptions.length <= 2 ? "Loading regions…" : "No matches"
+            emptyText: root.exitOptions.length <= 3 ? "Loading regions…" : "No matches"
             triggerLabel: "Auto (recommended)"
             options: root.exitOptions
             value: Model.gatewaySelection(root.gateway.exit)
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
             onChanged: function(v) { root.applyGateway("exit", v) }
+          }
+
+          // Result of a "Fastest" resolve: what was measured and chosen. The
+          // daemon's own Auto is latency-blind (it will happily route a user in
+          // India through Dubai to Baku), so this line exists to make the
+          // measured alternative visible and repeatable.
+          Item {
+            width: parent.width
+            visible: root.fastestBusy || root.fastestResult !== null
+            implicitHeight: Math.max(fastestLine.implicitHeight, retestLabel.implicitHeight)
+
+            Text {
+              id: fastestLine
+              anchors.left: parent.left
+              anchors.right: retestLabel.left
+              anchors.rightMargin: Style.spacing.sm
+              anchors.verticalCenter: parent.verticalCenter
+              elide: Text.ElideRight
+              text: root.fastestBusy
+                    ? "⚡  Measuring latency…"
+                    : "⚡  " + Model.fastestSummary(root.fastestResult)
+              color: root.fastestBusy ? Color.muted : root.contentForeground
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              id: retestLabel
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              visible: !root.fastestBusy
+              text: "Re-test"
+              color: retestMouse.containsMouse ? root.contentForeground : Color.accent
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+
+              MouseArea {
+                id: retestMouse
+                anchors.fill: parent
+                anchors.margins: -Style.space(6)
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.resolveFastest("both")
+              }
+            }
+          }
+
+          // Why a measurement could not be taken (tunnel up => every probe is
+          // routed through the exit gateway, so it would rank the exit's
+          // neighbourhood, not yours).
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            visible: root.fastestNotice !== ""
+            text: root.fastestNotice
+            color: Color.muted
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
           }
         }
 
