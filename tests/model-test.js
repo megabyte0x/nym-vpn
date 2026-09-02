@@ -268,6 +268,27 @@ test("liveRouteSummary names the countries actually in use", () => {
   assert.strictEqual(M.liveRouteSummary(raw, []), "")
 })
 
+test("routeMismatchNotice reports when the tunnel is not on the selected region", () => {
+  // Defence in depth: if anything (a stray selection, a daemon fallback) leaves
+  // the tunnel on a different region than the one selected, the user must be
+  // told rather than left to discover it. This is the exact failure that made
+  // the panel claim "Auto, excluding your country" while routing through India.
+  const n = M.routeMismatchNotice({ entry: "IN", exit: "SG" }, { entry: "MY", exit: "SG" })
+  assert.ok(/India/.test(n) && /Malaysia/.test(n), n)
+  assert.ok(/reconnect/i.test(n), n)
+})
+
+test("routeMismatchNotice stays quiet when there is nothing to report", () => {
+  // Matching route.
+  assert.strictEqual(M.routeMismatchNotice({ entry: "IN", exit: "SG" }, { entry: "IN", exit: "SG" }), "")
+  // "auto"/"random" mean "anything", so any live country satisfies them.
+  assert.strictEqual(M.routeMismatchNotice({ entry: "auto", exit: "auto" }, { entry: "KH", exit: "MY" }), "")
+  assert.strictEqual(M.routeMismatchNotice({ entry: "random", exit: "auto" }, { entry: "KH", exit: "MY" }), "")
+  // No tunnel up / unknown live route -> nothing to compare.
+  assert.strictEqual(M.routeMismatchNotice({ entry: "IN", exit: "SG" }, { entry: "", exit: "" }), "")
+  assert.strictEqual(M.routeMismatchNotice({ entry: "", exit: "" }, { entry: "IN", exit: "SG" }), "")
+})
+
 test("parseGatewayIdentity reads a pinned gateway key", () => {
   const raw = 'Gateway { identity: NodeIdentity { key: "2BDCzDG2ykdykTKRB8XVsEekHftv7oQ3TUrzsDxTWaxs" } }'
   assert.strictEqual(M.parseGatewayIdentity(raw), "2BDCzDG2ykdykTKRB8XVsEekHftv7oQ3TUrzsDxTWaxs")

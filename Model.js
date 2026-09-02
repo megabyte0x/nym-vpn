@@ -505,6 +505,37 @@ function liveRouteSummary(statusRaw, hosts) {
          "  \u2192  " + countryFlag(r.exit) + " " + countryName(r.exit)
 }
 
+// Compare the selected regions against the ones actually carrying traffic and
+// describe any difference.
+//
+// A constraint can end up not matching the live tunnel for several reasons: it
+// was changed without rebuilding the tunnel, the daemon fell back when a pinned
+// gateway was unavailable, or something selected a different region. Whatever
+// the cause, the panel must never quietly present the selection as the truth --
+// that is precisely how "Auto, excluding your country" ended up displayed for a
+// tunnel running through the user's own country.
+function routeMismatchNotice(selected, live) {
+  var s = selected || {}
+  var l = live || {}
+  function loose(v) {
+    var t = text(v).toLowerCase()
+    return t === "" || t === "auto" || t === "random"
+  }
+  var parts = []
+  var pairs = [["Entry", s.entry, l.entry], ["Exit", s.exit, l.exit]]
+  for (var i = 0; i < pairs.length; i++) {
+    var label = pairs[i][0]
+    var want = text(pairs[i][1]).toUpperCase()
+    var got = text(pairs[i][2]).toUpperCase()
+    if (loose(want) || got === "") continue      // "anything" is always satisfied
+    if (want === got) continue
+    parts.push(label + ": using " + countryFlag(got) + " " + countryName(got) +
+               ", not " + countryFlag(want) + " " + countryName(want))
+  }
+  if (parts.length === 0) return ""
+  return parts.join("  \u00b7  ") + ". Reconnect to apply your selection."
+}
+
 // Pull a pinned gateway key out of `gateway get` output, which reports
 // `Gateway { identity: NodeIdentity { key: "<base58>" } }` once a specific node
 // has been pinned with --entry-id/--exit-id.
@@ -1084,6 +1115,7 @@ if (typeof module !== "undefined" && module.exports) {
     parseStatusGateways: parseStatusGateways,
     liveRoute: liveRoute,
     liveRouteSummary: liveRouteSummary,
+    routeMismatchNotice: routeMismatchNotice,
     countryForGatewayId: countryForGatewayId,
     gatewaySummary: gatewaySummary,
     parseStatus: parseStatus,

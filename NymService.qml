@@ -59,6 +59,11 @@ Singleton {
   readonly property string routeSummary: svc.liveSummary !== ""
     ? svc.liveSummary
     : Model.gatewaySummary(svc.gateway, svc.entryHosts, svc.exitHosts)
+  // Non-empty when the tunnel is NOT on the selected region, whatever the
+  // cause (constraint not yet applied, daemon fallback, a stray selection).
+  readonly property string routeMismatch: Model.routeMismatchNotice(
+    { entry: svc.entrySelection, exit: svc.exitSelection },
+    Model.liveRoute(svc.statusRaw, svc.entryHosts))
   property string notice: ""
 
   // --- Fastest (measured) gateway selection --------------------------------
@@ -475,12 +480,20 @@ Singleton {
     }
   }
 
-  // Small gap so the daemon has committed the new constraint before we ask it
-  // to rebuild the tunnel.
+  // Rebuild the tunnel after a gateway change -- but only if it is actually
+  // needed. nym-vpnd already re-applies a constraint when the CURRENT gateway
+  // violates it (verified: switching entry country while connected moved the
+  // tunnel on its own), so reconnecting unconditionally would rebuild a tunnel
+  // that is already correct. The interval also lets settleTimer refresh status
+  // and config first, so the check below sees fresh state.
   Timer {
     id: reconnectTimer
-    interval: 400
-    onTriggered: svc.runAction(Model.reconnectCommand())
+    interval: 1500
+    onTriggered: {
+      if (svc.status.state !== "connected") return
+      if (svc.routeMismatch === "") return   // already on the selected region
+      svc.runAction(Model.reconnectCommand())
+    }
   }
 
   // Re-read state shortly after an action so Connect/Disconnect visibly settle.

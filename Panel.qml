@@ -543,6 +543,19 @@ Panel {
             }
           }
 
+          // The tunnel is not on the selected region. Shown so a silent
+          // fallback or an accidental change can never masquerade as the
+          // configured route.
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            visible: Nym.NymService.routeMismatch !== ""
+            text: "⚠  " + Nym.NymService.routeMismatch
+            color: Color.urgent
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+          }
+
           // Why a measurement could not be taken (tunnel up => every probe is
           // routed through the exit gateway, so it would rank the exit's
           // neighbourhood, not yours).
