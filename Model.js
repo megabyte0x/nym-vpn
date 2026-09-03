@@ -377,6 +377,27 @@ function parseStatus(raw, exitCode) {
   return status("unknown", "Unknown", detail || body)
 }
 
+// Turn a daemon error detail into a plain explanation plus the next step.
+// Returns "" for anything we do not genuinely recognise -- inventing advice for
+// an unknown failure is worse than showing the raw reason alone.
+function errorHint(detail) {
+  var d = text(detail).toLowerCase()
+  if (d === "") return ""
+  if (d.indexOf("connectionattemptsexceeded") >= 0) {
+    return "NymVPN gave up after repeated attempts to reach a gateway \u2014 usually a network that dropped, slept, or was still coming back up. Press Connect to try again."
+  }
+  if (d.indexOf("nomatchinggateway") >= 0 || d.indexOf("no matching gateway") >= 0) {
+    return "No gateway matches the selected regions right now \u2014 a pinned gateway may have left the network. Pick a different region, or choose Auto."
+  }
+  if (d.indexOf("timeout") >= 0 || d.indexOf("timed out") >= 0) {
+    return "The gateway did not answer in time. Press Connect to retry, or pick a closer region."
+  }
+  if (d.indexOf("dns") >= 0) {
+    return "DNS could not be resolved while the tunnel was coming up. Press Connect to retry."
+  }
+  return ""
+}
+
 function status(state, label, detail) {
   return {
     state: state,
@@ -1197,6 +1218,7 @@ if (typeof module !== "undefined" && module.exports) {
     gatewaySummary: gatewaySummary,
     parseStatus: parseStatus,
     stateColorRole: stateColorRole,
+    errorHint: errorHint,
     stateGlyph: stateGlyph,
     parseAccount: parseAccount,
     parseTwoHop: parseTwoHop,

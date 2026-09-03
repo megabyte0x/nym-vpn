@@ -183,6 +183,34 @@ Panel {
           }
         }
 
+        // Why it failed, and what to do about it. The daemon's reason was
+        // parsed all along but never shown, so the panel could only say
+        // "Error" -- unreadable and unactionable.
+        Column {
+          width: parent.width
+          spacing: Style.spacing.xxs
+          visible: root.status.state === "error" && root.status.detail !== ""
+
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: root.status.detail
+            color: Color.urgent
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            visible: text !== ""
+            text: Model.errorHint(root.status.detail)
+            color: Color.muted
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+
         PanelSeparator {}
 
         // Setup card (missing CLI, daemon down, or authentication needed)

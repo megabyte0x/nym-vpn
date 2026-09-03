@@ -119,6 +119,26 @@ test("parseStatus empty non-zero exit -> daemon-down", () => {
   assert.strictEqual(M.parseStatus("", 1).state, "daemon-down")
 })
 
+test("parseStatus keeps a readable reason for an error state", () => {
+  // The panel showed a bare "Error" with no reason and no next step; the cause
+  // was parsed all along but never surfaced.
+  const s = M.parseStatus("State: Error state: ConnectionAttemptsExceeded", 0)
+  assert.strictEqual(s.state, "error")
+  assert.ok(/ConnectionAttemptsExceeded/.test(s.detail), s.detail)
+})
+
+test("errorHint explains the common failures and what to do", () => {
+  const h = M.errorHint("Error state: ConnectionAttemptsExceeded")
+  assert.ok(/gateway|network/i.test(h), h)
+  assert.ok(/connect/i.test(h), h)          // tells the user how to recover
+  // A pinned gateway that has gone away is worth calling out specifically,
+  // because the fix is to change region rather than to retry forever.
+  assert.ok(/region|gateway/i.test(M.errorHint("Error state: NoMatchingGateway")))
+  // Unknown errors get no invented advice.
+  assert.strictEqual(M.errorHint("Error state: SomethingBrandNew"), "")
+  assert.strictEqual(M.errorHint(""), "")
+})
+
 // --- colour + glyph mapping ---
 test("stateColorRole mapping", () => {
   assert.strictEqual(M.stateColorRole("connected"), "ok")
