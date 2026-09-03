@@ -193,6 +193,37 @@ function sameSelection(value, current) {
 }
 
 // NymVPN gateway identities are base58 (no 0, O, I, l) public keys.
+// What the picker should display for a hop. "Fastest" is a MODE the user
+// selected, not a one-shot action: once resolved it pins a concrete gateway,
+// but echoing that country back into the picker made it look as though the user
+// had hand-picked it. While the hop is in fastest mode the picker keeps saying
+// so; the resolved country is reported separately, under the pickers.
+function displaySelection(selection, fastestMode) {
+  if (fastestMode === true) return "fastest"
+  return text(selection)
+}
+
+// Per-hop fastest mode, persisted so it survives a shell restart.
+function parseFastestModes(raw) {
+  var out = { entry: false, exit: false }
+  var body = text(raw)
+  if (body === "") return out
+  try {
+    var d = JSON.parse(body)
+    if (!d || typeof d !== "object") return out
+    out.entry = d.entry === true
+    out.exit = d.exit === true
+  } catch (e) {
+    // A corrupt or partially written file must not break the picker.
+  }
+  return out
+}
+
+function serializeFastestModes(modes) {
+  var m = modes || {}
+  return JSON.stringify({ entry: m.entry === true, exit: m.exit === true }) + "\n"
+}
+
 function isGatewayId(value) {
   return /^[1-9A-HJ-NP-Za-km-z]{32,50}$/.test(text(value))
 }
@@ -977,6 +1008,26 @@ function canProbe(state) {
   return !(s === "connected" || s === "connecting" || s === "disconnecting")
 }
 
+// Steps of the automatic measure-and-switch cycle, for the panel to narrate.
+// Latency cannot be measured through the tunnel, so choosing Fastest while
+// connected drops the tunnel, measures, applies the winner and reconnects --
+// each step named so a tunnel that suddenly drops is never a surprise.
+function fastestPhaseLabel(phase) {
+  switch (text(phase).toLowerCase()) {
+    case "disconnecting": return "Disconnecting to measure\u2026"
+    case "measuring": return "Measuring latency\u2026"
+    case "applying": return "Applying the fastest route\u2026"
+    case "reconnecting": return "Reconnecting\u2026"
+    default: return ""
+  }
+}
+
+function measureCycleNotice() {
+  return "Measuring needs the tunnel down \u2014 probes sent through it would rank the exit's " +
+         "neighbours, not yours. The tunnel is briefly disconnected (your traffic is unprotected " +
+         "for those few seconds), then reconnected automatically on the fastest route."
+}
+
 function probeSkipReason(state) {
   if (canProbe(state)) return ""
   // We deliberately do NOT apply an unmeasured guess here: the user asked for
@@ -1229,6 +1280,9 @@ if (typeof module !== "undefined" && module.exports) {
     parseLan: parseLan,
     lanLabel: lanLabel,
     isFastest: isFastest,
+    displaySelection: displaySelection,
+    parseFastestModes: parseFastestModes,
+    serializeFastestModes: serializeFastestModes,
     sameSelection: sameSelection,
     localCountryCommand: localCountryCommand,
     parseLocalCountry: parseLocalCountry,
@@ -1240,6 +1294,8 @@ if (typeof module !== "undefined" && module.exports) {
     pickFastest: pickFastest,
     canProbe: canProbe,
     probeSkipReason: probeSkipReason,
+    fastestPhaseLabel: fastestPhaseLabel,
+    measureCycleNotice: measureCycleNotice,
     countryDistanceKm: countryDistanceKm,
     fastestSummary: fastestSummary,
     chooseFastestExit: chooseFastestExit,

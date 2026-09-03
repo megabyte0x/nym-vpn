@@ -5,6 +5,7 @@ import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
 
+
 // Process-wide shared state for the NymVPN plugin.
 //
 // The Omarchy bar is instantiated per monitor (Variants over Quickshell.screens),
@@ -48,8 +49,17 @@ Singleton {
   // has been pinned, which would otherwise render as "Auto" in the pickers.
   readonly property var entryHosts: Model.parseGatewayHosts(svc.gatewayRaw[svc.entryType] || "")
   readonly property var exitHosts: Model.parseGatewayHosts(svc.gatewayRaw[svc.exitType] || "")
+  // What the daemon is actually constrained to.
   readonly property string entrySelection: Model.gatewaySelection(svc.gateway.entry, svc.entryHosts)
   readonly property string exitSelection: Model.gatewaySelection(svc.gateway.exit, svc.exitHosts)
+  // "Fastest" is a sticky per-hop MODE. The daemon only ever stores the
+  // resolved gateway, so the mode is tracked here (and persisted) -- otherwise
+  // the picker shows the country it resolved to and looks as though the user
+  // hand-picked it.
+  property bool fastestModeEntry: false
+  property bool fastestModeExit: false
+  readonly property string entryDisplay: Model.displaySelection(svc.entrySelection, svc.fastestModeEntry)
+  readonly property string exitDisplay: Model.displaySelection(svc.exitSelection, svc.fastestModeExit)
   // Raw `status` text, kept so we can read the gateways the tunnel is ACTUALLY
   // using rather than only the constraint the daemon has stored.
   property string statusRaw: ""
@@ -184,9 +194,12 @@ Singleton {
   function applyGateway(role, value) {
     // "Fastest" is not a daemon constraint: resolve it by measurement first.
     if (Model.isFastest(value)) {
+      svc.setFastestMode(role, true)
       svc.resolveFastest(role)
       return
     }
+    // Any other explicit pick leaves fastest mode for that hop.
+    svc.setFastestMode(role, false)
     // Re-picking the row that is already active must not rebuild the tunnel.
     var current = role === "exit" ? svc.exitSelection : svc.entrySelection
     if (Model.sameSelection(value, current)) return
@@ -207,6 +220,13 @@ Singleton {
 
   // Kick off a Fastest resolve for one hop ("entry"/"exit") or both.
   // Idempotent while one is already in flight.
+  function setFastestMode(role, on) {
+    if (role === "entry") svc.fastestModeEntry = on
+    else if (role === "exit") svc.fastestModeExit = on
+    else { svc.fastestModeEntry = on; svc.fastestModeExit = on }
+    svc.saveFastestModes()
+  }
+
   function resolveFastest(role) {
     if (svc.fastestBusy || svc.actionBusy) return
     var r = String(role || "both")
@@ -218,6 +238,21 @@ Singleton {
     svc.fastestBusy = true
     svc.fastestNotice = ""
     svc.notice = ""
+
+    // Latency cannot be measured through the tunnel (every probe would leave
+    // from the exit gateway). Rather than making the user disconnect, measure
+    // and reconnect by hand, run the whole cycle here: drop the tunnel,
+    // measure, apply, and restore the connection automatically.
+    if (!Model.canProbe(svc.status.state)) {
+      svc.resumeAfterResolve = true
+      svc.fastestPhase = "disconnecting"
+      svc.fastestNotice = Model.measureCycleNotice()
+      svc.runAction(Model.disconnectCommand())
+      disconnectWaitTimer.restart()
+      return
+    }
+
+    svc.fastestPhase = "measuring"
     svc.fastestStep()
   }
 
@@ -281,7 +316,15 @@ Singleton {
     svc.fastestBusy = false
     svc.fastestRole = ""
     svc.fastestPlan = null
+    svc.fastestPhase = ""
     svc.notice = message
+    // We took the tunnel down to measure; put it back even on failure so the
+    // user is never silently left unprotected.
+    if (svc.resumeAfterResolve) {
+      svc.resumeAfterResolve = false
+      svc.pendingConnect = true
+      connectTimer.restart()
+    }
   }
 
   // Apply a resolved route to the hop(s) the user asked for, then reconnect if
@@ -348,12 +391,27 @@ Singleton {
       svc.notice = "Could not apply the fastest region."
       return
     }
-    svc.pendingReconnect = svc.status.state === "connected"
+    // Restore the tunnel we dropped in order to measure.
+    if (svc.resumeAfterResolve) {
+      svc.resumeAfterResolve = false
+      svc.pendingConnect = true
+    } else {
+      svc.pendingReconnect = svc.status.state === "connected"
+    }
     svc.runAction(command)
   }
 
   // Set when a gateway change needs the tunnel rebuilt to take effect.
   property bool pendingReconnect: false
+
+  // --- automatic measure-and-switch cycle ----------------------------------
+  // Latency cannot be measured through the tunnel, so choosing Fastest while
+  // connected runs disconnect -> measure -> apply -> reconnect on its own.
+  // Which step we are on ("" when idle), for the panel to narrate.
+  property string fastestPhase: ""
+  // The tunnel was up when the resolve started, so restore it afterwards.
+  property bool resumeAfterResolve: false
+  property bool pendingConnect: false
   // Rebuild even when the live route already satisfies the selection.
   property bool forceReconnect: false
 
@@ -504,9 +562,13 @@ Singleton {
       }
     }
     onExited: function(code) {
-      // A gateway constraint only takes effect on a fresh tunnel, so rebuild it
-      // when we changed one while connected.
-      if (svc.pendingReconnect) {
+      // Finish the automatic measure-and-switch cycle by reconnecting.
+      if (svc.pendingConnect) {
+        svc.pendingConnect = false
+        connectTimer.restart()
+      } else if (svc.pendingReconnect) {
+        // A gateway constraint only takes effect on a fresh tunnel, so rebuild
+        // it when we changed one while connected.
         svc.pendingReconnect = false
         reconnectTimer.restart()
       }
@@ -537,6 +599,81 @@ Singleton {
       if (!force && svc.routeMismatch === "") return
       svc.runAction(Model.reconnectCommand())
     }
+  }
+
+  // Wait for the tunnel to actually go down before probing. Without this the
+  // probe would run against a still-open tunnel and measure the exit's
+  // neighbourhood instead of ours.
+  Timer {
+    id: disconnectWaitTimer
+    interval: 1200
+    repeat: true
+    property int ticks: 0
+    onRunningChanged: if (running) ticks = 0
+    onTriggered: {
+      disconnectWaitTimer.ticks++
+      svc.refreshStatus()
+      if (svc.actionBusy) return
+      if (Model.canProbe(svc.status.state)) {
+        disconnectWaitTimer.stop()
+        svc.fastestPhase = "measuring"
+        svc.fastestStep()
+        return
+      }
+      // ~25s: give up, restore the tunnel rather than leaving it down.
+      if (disconnectWaitTimer.ticks > 20) {
+        disconnectWaitTimer.stop()
+        svc.fastestFail("Could not disconnect to measure. Reconnecting.")
+      }
+    }
+  }
+
+  // Reconnect after the fastest route has been applied.
+  Timer {
+    id: connectTimer
+    interval: 700
+    onTriggered: {
+      svc.fastestPhase = "reconnecting"
+      svc.runAction(Model.connectCommand())
+      cycleDoneTimer.restart()
+    }
+  }
+
+  // Clear the cycle indicator once the tunnel has had time to come back.
+  Timer {
+    id: cycleDoneTimer
+    interval: 4000
+    onTriggered: {
+      svc.fastestPhase = ""
+      svc.refreshStatus()
+      svc.refreshConfig()
+    }
+  }
+
+  // --- persisted per-hop "Fastest" mode ------------------------------------
+  readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy/nym-vpn.json"
+
+  function saveFastestModes() {
+    modesFile.setText(Model.serializeFastestModes({
+      entry: svc.fastestModeEntry, exit: svc.fastestModeExit
+    }))
+  }
+
+  function loadFastestModes(raw) {
+    var m = Model.parseFastestModes(raw)
+    svc.fastestModeEntry = m.entry
+    svc.fastestModeExit = m.exit
+  }
+
+  FileView {
+    id: modesFile
+    path: svc.statePath
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
+    onLoaded: svc.loadFastestModes(text())
+    // First run: no file yet, which is simply "no hop is in fastest mode".
+    onLoadFailed: svc.loadFastestModes("")
   }
 
   // Re-read state shortly after an action so Connect/Disconnect visibly settle.

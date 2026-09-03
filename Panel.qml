@@ -509,7 +509,9 @@ Panel {
             // country. A neutral placeholder cannot lie.
             triggerLabel: "Select a region…"
             options: root.entryOptions
-            value: Nym.NymService.entrySelection
+            // Show the MODE the user chose (Fastest) rather than the country it
+            // resolved to, which looked like a manual pick.
+            value: Nym.NymService.entryDisplay
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
             onChanged: function(v) { root.applyGateway("entry", v) }
@@ -524,7 +526,7 @@ Panel {
             emptyText: root.exitOptions.length <= 3 ? "Loading regions…" : "No matches"
             triggerLabel: "Select a region…"
             options: root.exitOptions
-            value: Nym.NymService.exitSelection
+            value: Nym.NymService.exitDisplay
             foreground: root.contentForeground
             fontFamily: root.contentFontFamily
             onChanged: function(v) { root.applyGateway("exit", v) }
@@ -547,7 +549,8 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               elide: Text.ElideRight
               text: root.fastestBusy
-                    ? "⚡  Measuring latency…"
+                    ? "⚡  " + (Model.fastestPhaseLabel(Nym.NymService.fastestPhase)
+                                 || "Measuring latency…")
                     : "⚡  " + Model.fastestSummary(root.fastestResult,
                                                     Nym.NymService.lastFastestRole)
               color: root.fastestBusy ? Color.muted : root.contentForeground

@@ -681,6 +681,25 @@ test("canProbe is true when traffic still leaves the real interface", () => {
   assert.strictEqual(M.canProbe("unknown"), true)
 })
 
+test("fastestPhaseLabel narrates the automatic measure-and-switch cycle", () => {
+  // Measuring requires the tunnel down, so choosing Fastest while connected
+  // runs disconnect -> measure -> apply -> reconnect on its own. Each step is
+  // named so the user understands why their tunnel just dropped.
+  assert.ok(/disconnect/i.test(M.fastestPhaseLabel("disconnecting")))
+  assert.ok(/measur/i.test(M.fastestPhaseLabel("measuring")))
+  assert.ok(/apply/i.test(M.fastestPhaseLabel("applying")))
+  assert.ok(/reconnect/i.test(M.fastestPhaseLabel("reconnecting")))
+  assert.strictEqual(M.fastestPhaseLabel(""), "")
+  assert.strictEqual(M.fastestPhaseLabel("bogus"), "")
+})
+
+test("measureCycleNotice warns that the tunnel drops briefly", () => {
+  const n = M.measureCycleNotice()
+  assert.ok(/reconnect/i.test(n), n)
+  // Dropping a live tunnel is a privacy event, so it must be stated plainly.
+  assert.ok(/disconnect|unprotected|briefly/i.test(n), n)
+})
+
 test("probeSkipReason explains the refusal and promises no change", () => {
   const why = M.probeSkipReason("connected")
   assert.ok(/disconnect/i.test(why), why)
@@ -862,6 +881,29 @@ test("setGatewayCommand refuses 'fastest' because it must be resolved first", ()
   // break the tunnel.
   assert.strictEqual(M.setGatewayCommand("entry", "fastest"), null)
   assert.strictEqual(M.setGatewayCommand("exit", "fastest"), null)
+})
+
+test("fastest is a sticky MODE, so the picker keeps showing it", () => {
+  // Choosing "Fastest" resolves to a concrete gateway, but the user chose a
+  // MODE. Reflecting the resolved country back into the picker made it look
+  // like they had hand-picked Malaysia. displaySelection keeps the mode.
+  assert.strictEqual(M.displaySelection("MY", true), "fastest")
+  assert.strictEqual(M.displaySelection("MY", false), "MY")
+  assert.strictEqual(M.displaySelection("auto", false), "auto")
+  // Mode on but nothing resolved yet still shows the mode.
+  assert.strictEqual(M.displaySelection("", true), "fastest")
+})
+
+test("parseFastestModes round-trips the persisted per-hop modes", () => {
+  // The mode must survive a shell restart, otherwise the picker silently
+  // reverts to showing a country the user never chose.
+  assert.deepStrictEqual(M.parseFastestModes('{"entry":false,"exit":true}'),
+                         { entry: false, exit: true })
+  assert.deepStrictEqual(M.parseFastestModes(""), { entry: false, exit: false })
+  assert.deepStrictEqual(M.parseFastestModes("not json"), { entry: false, exit: false })
+  assert.deepStrictEqual(M.parseFastestModes('{"entry":"yes"}'), { entry: false, exit: false })
+  const json = M.serializeFastestModes({ entry: true, exit: false })
+  assert.deepStrictEqual(M.parseFastestModes(json), { entry: true, exit: false })
 })
 
 test("isFastest recognises the selector token", () => {
