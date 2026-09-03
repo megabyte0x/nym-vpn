@@ -203,6 +203,19 @@ function displaySelection(selection, fastestMode) {
   return text(selection)
 }
 
+// Which hop(s) a "Re-test" should redo. The persisted per-hop modes are the
+// source of truth, because after a restart there is no in-session role and
+// defaulting to "both" would re-resolve a hop the user had set to Auto.
+function repeatRole(modes, lastRole) {
+  var m = modes || {}
+  if (m.entry === true && m.exit === true) return "both"
+  if (m.exit === true) return "exit"
+  if (m.entry === true) return "entry"
+  var last = text(lastRole).toLowerCase()
+  if (last === "entry" || last === "exit" || last === "both") return last
+  return "both"
+}
+
 // Per-hop fastest mode, persisted so it survives a shell restart.
 function parseFastestModes(raw) {
   var out = { entry: false, exit: false }
@@ -1282,6 +1295,7 @@ if (typeof module !== "undefined" && module.exports) {
     isFastest: isFastest,
     displaySelection: displaySelection,
     parseFastestModes: parseFastestModes,
+    repeatRole: repeatRole,
     serializeFastestModes: serializeFastestModes,
     sameSelection: sameSelection,
     localCountryCommand: localCountryCommand,

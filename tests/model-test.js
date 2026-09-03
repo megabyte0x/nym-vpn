@@ -883,6 +883,18 @@ test("setGatewayCommand refuses 'fastest' because it must be resolved first", ()
   assert.strictEqual(M.setGatewayCommand("exit", "fastest"), null)
 })
 
+test("repeatRole re-tests the hops that are in fastest mode", () => {
+  // After a restart there is no in-memory "last role", but the persisted modes
+  // still say which hops are Fastest. Falling back to "both" would re-resolve
+  // an entry the user had set to Auto.
+  assert.strictEqual(M.repeatRole({ entry: false, exit: true }, ""), "exit")
+  assert.strictEqual(M.repeatRole({ entry: true, exit: false }, ""), "entry")
+  assert.strictEqual(M.repeatRole({ entry: true, exit: true }, ""), "both")
+  // The in-session role wins when no hop is flagged (legacy/no state file).
+  assert.strictEqual(M.repeatRole({ entry: false, exit: false }, "exit"), "exit")
+  assert.strictEqual(M.repeatRole({ entry: false, exit: false }, ""), "both")
+})
+
 test("fastest is a sticky MODE, so the picker keeps showing it", () => {
   // Choosing "Fastest" resolves to a concrete gateway, but the user chose a
   // MODE. Reflecting the resolved country back into the picker made it look

@@ -538,7 +538,11 @@ Panel {
           // measured alternative visible and repeatable.
           Item {
             width: parent.width
+            // Also shown when a hop is simply IN fastest mode with no result
+            // yet (e.g. straight after a shell restart), so Re-test stays
+            // reachable instead of the row vanishing.
             visible: root.fastestBusy || root.fastestResult !== null
+                     || Nym.NymService.fastestModeEntry || Nym.NymService.fastestModeExit
             implicitHeight: Math.max(fastestLine.implicitHeight, retestLabel.implicitHeight)
 
             Text {
@@ -548,11 +552,14 @@ Panel {
               anchors.rightMargin: Style.spacing.sm
               anchors.verticalCenter: parent.verticalCenter
               elide: Text.ElideRight
-              text: root.fastestBusy
-                    ? "⚡  " + (Model.fastestPhaseLabel(Nym.NymService.fastestPhase)
-                                 || "Measuring latency…")
-                    : "⚡  " + Model.fastestSummary(root.fastestResult,
-                                                    Nym.NymService.lastFastestRole)
+              text: {
+                if (root.fastestBusy)
+                  return "⚡  " + (Model.fastestPhaseLabel(Nym.NymService.fastestPhase)
+                                   || "Measuring latency…")
+                var summary = Model.fastestSummary(root.fastestResult,
+                                                   Nym.NymService.lastFastestRole)
+                return "⚡  " + (summary || "Fastest — not measured yet")
+              }
               color: root.fastestBusy ? Color.muted : root.contentForeground
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.caption

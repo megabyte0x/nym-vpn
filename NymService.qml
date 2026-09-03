@@ -230,9 +230,13 @@ Singleton {
   function resolveFastest(role) {
     if (svc.fastestBusy || svc.actionBusy) return
     var r = String(role || "both")
-    // "repeat" = redo exactly what the last resolve applied (the Re-test
-    // button), so re-testing an exit-only Fastest never touches the entry.
-    if (r === "repeat") r = svc.lastFastestRole || "both"
+    // "repeat" = redo exactly the hop(s) that are in Fastest mode (the Re-test
+    // button), so re-testing an exit-only Fastest never touches the entry --
+    // including after a restart, when there is no in-session role left.
+    if (r === "repeat") {
+      r = Model.repeatRole({ entry: svc.fastestModeEntry, exit: svc.fastestModeExit },
+                           svc.lastFastestRole)
+    }
     if (r !== "entry" && r !== "exit") r = "both"
     svc.fastestRole = r
     svc.fastestBusy = true
