@@ -474,7 +474,12 @@ Panel {
             label: "Entry region"
             placeholderText: "Search a country…"
             emptyText: root.entryOptions.length <= 3 ? "Loading regions…" : "No matches"
-            triggerLabel: "Auto (recommended)"
+            // NOT "Auto": the dropdown falls back to this whenever the current
+            // value is unknown (e.g. a pinned gateway before the pool list has
+            // loaded). Labelling that state "Auto" told users their entry was
+            // Auto while the tunnel was pinned to a gateway in their own
+            // country. A neutral placeholder cannot lie.
+            triggerLabel: "Select a region…"
             options: root.entryOptions
             value: Nym.NymService.entrySelection
             foreground: root.contentForeground
@@ -489,7 +494,7 @@ Panel {
             label: "Exit region"
             placeholderText: "Search a country…"
             emptyText: root.exitOptions.length <= 3 ? "Loading regions…" : "No matches"
-            triggerLabel: "Auto (recommended)"
+            triggerLabel: "Select a region…"
             options: root.exitOptions
             value: Nym.NymService.exitSelection
             foreground: root.contentForeground
@@ -515,7 +520,8 @@ Panel {
               elide: Text.ElideRight
               text: root.fastestBusy
                     ? "⚡  Measuring latency…"
-                    : "⚡  " + Model.fastestSummary(root.fastestResult)
+                    : "⚡  " + Model.fastestSummary(root.fastestResult,
+                                                    Nym.NymService.lastFastestRole)
               color: root.fastestBusy ? Color.muted : root.contentForeground
               font.family: root.contentFontFamily
               font.pixelSize: Style.font.caption
@@ -538,7 +544,9 @@ Panel {
                 anchors.margins: -Style.space(6)
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.resolveFastest("both")
+                // Repeat whatever the last resolve applied -- re-testing an
+                // exit-only Fastest must not overwrite the entry selection.
+                onClicked: root.resolveFastest("repeat")
               }
             }
           }

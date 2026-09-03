@@ -268,6 +268,34 @@ test("liveRouteSummary names the countries actually in use", () => {
   assert.strictEqual(M.liveRouteSummary(raw, []), "")
 })
 
+test("selectionSatisfied knows that Auto EXCLUDES your own country", () => {
+  // The bug this encodes: "auto" was treated as "anything satisfies it", so
+  // switching the entry to Auto while connected never rebuilt the tunnel and
+  // the user stayed on the previously pinned gateway in their own country --
+  // the panel said Auto, the traffic said India.
+  assert.strictEqual(M.selectionSatisfied("auto", "KH", "IN"), true)
+  assert.strictEqual(M.selectionSatisfied("auto", "IN", "IN"), false)
+  // Explicit country: only that country satisfies it.
+  assert.strictEqual(M.selectionSatisfied("SG", "SG", "IN"), true)
+  assert.strictEqual(M.selectionSatisfied("SG", "MY", "IN"), false)
+  // Random accepts any gateway, so it is always satisfied. Re-rolling when the
+  // user re-picks Random is a reconnect decision, not a mismatch.
+  assert.strictEqual(M.selectionSatisfied("random", "SG", "IN"), true)
+  // Nothing selected, or nothing live to compare against.
+  assert.strictEqual(M.selectionSatisfied("", "SG", "IN"), true)
+  assert.strictEqual(M.selectionSatisfied("SG", "", "IN"), true)
+  // Unknown home country: Auto cannot be judged, so do not cry wolf.
+  assert.strictEqual(M.selectionSatisfied("auto", "IN", ""), true)
+})
+
+test("routeMismatchNotice flags an Auto entry sitting in your own country", () => {
+  const n = M.routeMismatchNotice({ entry: "auto", exit: "auto" }, { entry: "IN", exit: "MY" }, "IN")
+  assert.ok(/India/.test(n), n)
+  assert.ok(/auto/i.test(n), n)
+  // Auto satisfied by a foreign gateway -> silent.
+  assert.strictEqual(M.routeMismatchNotice({ entry: "auto", exit: "auto" }, { entry: "KH", exit: "MY" }, "IN"), "")
+})
+
 test("routeMismatchNotice reports when the tunnel is not on the selected region", () => {
   // Defence in depth: if anything (a stray selection, a daemon fallback) leaves
   // the tunnel on a different region than the one selected, the user must be
@@ -821,6 +849,57 @@ test("isFastest recognises the selector token", () => {
   assert.strictEqual(M.isFastest("FASTEST"), true)
   assert.strictEqual(M.isFastest("auto"), false)
   assert.strictEqual(M.isFastest(""), false)
+})
+
+test("chooseFastestExit never returns an excluded country", () => {
+  // An exit-only resolve used to take the single fastest country overall, which
+  // is typically the user's OWN country -- so "Fastest exit" pinned an Indian
+  // exit for a user in India, defeating the point of the VPN. The exit must
+  // skip the entry's country and the user's own country.
+  const pick = {
+    entry: "IN", exit: "MY",
+    ranked: [
+      { cc: "IN", rtt: 20, id: "JNaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      { cc: "MY", rtt: 42, id: "MYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      { cc: "SG", rtt: 45, id: "SGaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+    ]
+  }
+  assert.deepStrictEqual(M.chooseFastestExit(pick, ["IN"]),
+    { cc: "MY", id: "MYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", rtt: 42 })
+  assert.deepStrictEqual(M.chooseFastestExit(pick, ["IN", "MY"]),
+    { cc: "SG", id: "SGaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", rtt: 45 })
+  // Excluding everything must still yield a usable exit rather than nothing.
+  const all = M.chooseFastestExit(pick, ["IN", "MY", "SG"])
+  assert.strictEqual(all.cc, "MY")   // falls back to the pick's own exit
+  // Empty/awkward inputs do not crash.
+  assert.strictEqual(M.chooseFastestExit({ exit: "SG" }, []).cc, "SG")
+  assert.strictEqual(M.chooseFastestExit(null, []).cc, "")
+})
+
+test("fastestSummary only describes the hop(s) that were actually resolved", () => {
+  const pick = { entry: "IN", exit: "MY", entryRtt: 22, exitRtt: 41, measured: true }
+  // Resolving ONLY the exit must not claim an entry: the entry may well be Auto,
+  // and reporting "India -> Malaysia" told the user their entry was India when
+  // nothing had touched it.
+  const exitOnly = M.fastestSummary(pick, "exit")
+  assert.ok(/Malaysia/.test(exitOnly), exitOnly)
+  assert.ok(!/India/.test(exitOnly), exitOnly)
+  const entryOnly = M.fastestSummary(pick, "entry")
+  assert.ok(/India/.test(entryOnly), entryOnly)
+  assert.ok(!/Malaysia/.test(entryOnly), entryOnly)
+  // Both hops -> the full route, as before.
+  const both = M.fastestSummary(pick, "both")
+  assert.ok(/India/.test(both) && /Malaysia/.test(both), both)
+  assert.ok(/India/.test(M.fastestSummary(pick)), "no role behaves like both")
+})
+
+test("homeCountryNotice only fires when the ENTRY hop was actually applied", () => {
+  const pick = { entry: "IN", exit: "MY", measured: true }
+  // Exit-only resolve never touched the entry, so warning about a home-country
+  // entry is simply false.
+  assert.strictEqual(M.homeCountryNotice(pick, "IN", "exit"), "")
+  assert.ok(/India/.test(M.homeCountryNotice(pick, "IN", "entry")))
+  assert.ok(/India/.test(M.homeCountryNotice(pick, "IN", "both")))
 })
 
 test("homeCountryNotice warns when the fastest entry is your own country", () => {

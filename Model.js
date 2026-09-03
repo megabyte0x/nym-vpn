@@ -514,23 +514,48 @@ function liveRouteSummary(statusRaw, hosts) {
 // the cause, the panel must never quietly present the selection as the truth --
 // that is precisely how "Auto, excluding your country" ended up displayed for a
 // tunnel running through the user's own country.
-function routeMismatchNotice(selected, live) {
+// Does the live country actually satisfy what the user selected?
+//
+// The subtlety that caused a real bug: "auto" is NOT "anything". NymVPN's Auto
+// explicitly EXCLUDES the user's own jurisdiction, so an Auto selection sitting
+// on a gateway in the user's own country is unsatisfied -- which is exactly the
+// state that let the panel show "Auto (excluding your country)" while the tunnel
+// ran through India.
+function selectionSatisfied(value, liveCc, homeCc) {
+  var want = text(value).toLowerCase()
+  var got = text(liveCc).toUpperCase()
+  var home = text(homeCc).toUpperCase()
+  if (want === "") return true          // nothing selected
+  if (got === "") return true           // nothing live to compare against
+  // "random" means any gateway is acceptable, so it is always satisfied. Wanting
+  // a fresh roll when random is re-picked is a RECONNECT decision, not a
+  // mismatch -- see NymService.applyGateway.
+  if (want === "random") return true
+  if (want === "auto") {
+    if (home === "") return true        // cannot judge without a home country
+    return got !== home
+  }
+  return want.toUpperCase() === got
+}
+
+function routeMismatchNotice(selected, live, homeCc) {
   var s = selected || {}
   var l = live || {}
-  function loose(v) {
-    var t = text(v).toLowerCase()
-    return t === "" || t === "auto" || t === "random"
-  }
+  var home = text(homeCc).toUpperCase()
   var parts = []
   var pairs = [["Entry", s.entry, l.entry], ["Exit", s.exit, l.exit]]
   for (var i = 0; i < pairs.length; i++) {
     var label = pairs[i][0]
-    var want = text(pairs[i][1]).toUpperCase()
+    var want = text(pairs[i][1])
     var got = text(pairs[i][2]).toUpperCase()
-    if (loose(want) || got === "") continue      // "anything" is always satisfied
-    if (want === got) continue
-    parts.push(label + ": using " + countryFlag(got) + " " + countryName(got) +
-               ", not " + countryFlag(want) + " " + countryName(want))
+    if (selectionSatisfied(want, got, home)) continue
+    if (text(want).toLowerCase() === "auto") {
+      parts.push(label + ": using " + countryFlag(got) + " " + countryName(got) +
+                 " \u2014 your own country, which Auto excludes")
+    } else {
+      parts.push(label + ": using " + countryFlag(got) + " " + countryName(got) +
+                 ", not " + countryFlag(want) + " " + countryName(want))
+    }
   }
   if (parts.length === 0) return ""
   return parts.join("  \u00b7  ") + ". Reconnect to apply your selection."
@@ -1048,9 +1073,13 @@ function pickFastest(results, opts) {
 // default avoids. Say so at the moment it happens rather than letting the user
 // discover their own country sitting in the entry slot and conclude that Auto
 // is broken.
-function homeCountryNotice(result, localCc) {
+function homeCountryNotice(result, localCc, role) {
   var r = result || {}
   var home = text(localCc).toUpperCase()
+  // Only meaningful when the ENTRY hop was actually applied: an exit-only
+  // resolve never touched the entry, so warning about it would be false.
+  var applied = text(role).toLowerCase()
+  if (applied === "exit") return ""
   if (home === "" || text(r.entry).toUpperCase() !== home) return ""
   return "Fastest chose " + countryName(home) + " \u2014 your own country \u2014 as the entry, " +
          "because it is the lowest latency. That is the speed/privacy tradeoff Auto avoids: " +
@@ -1058,18 +1087,65 @@ function homeCountryNotice(result, localCc) {
 }
 
 // One-line description of a resolved Fastest route for the panel.
-function fastestSummary(result) {
+// Pick the fastest EXIT that is not in an excluded country.
+//
+// Callers exclude the entry's country (the two hops should differ) and the
+// user's own country -- an exit inside your own jurisdiction is what the VPN
+// exists to avoid, and it is exactly what naively taking the fastest country
+// produced, since the fastest country is usually the one you are sitting in.
+// Falls back to the pick's own exit so a resolve always yields something.
+function chooseFastestExit(pick, excludes) {
+  var p = pick || {}
+  var skip = {}
+  ;(Array.isArray(excludes) ? excludes : []).forEach(function (c) {
+    var cc = text(c).toUpperCase()
+    if (cc !== "") skip[cc] = true
+  })
+  var ranked = Array.isArray(p.ranked) ? p.ranked : []
+  for (var i = 0; i < ranked.length; i++) {
+    var cc = text(ranked[i] && ranked[i].cc).toUpperCase()
+    if (cc === "" || skip[cc]) continue
+    return {
+      cc: cc,
+      id: text(ranked[i].id),
+      rtt: (typeof ranked[i].rtt === "number") ? ranked[i].rtt : null
+    }
+  }
+  return {
+    cc: text(p.exit).toUpperCase(),
+    id: text(p.exitId),
+    rtt: (typeof p.exitRtt === "number") ? p.exitRtt : null
+  }
+}
+
+// Describe a resolved Fastest route. `role` limits the description to the hop(s)
+// that were actually applied -- reporting a full "India -> Malaysia" route for an
+// exit-only resolve told users their entry was India when nothing had touched it.
+function fastestSummary(result, role) {
   var r = result || {}
   var e = text(r.entry).toUpperCase()
   var x = text(r.exit).toUpperCase()
   if (e === "" && x === "") return ""
+  var which = text(role).toLowerCase()
+  if (which !== "entry" && which !== "exit") which = "both"
   function pretty(v) {
     if (v === "") return "?"
     return countryFlag(v) + " " + countryName(v)
   }
-  var line = pretty(e) + "  \u2192  " + pretty(x)
-  if (r.measured === true && typeof r.entryRtt === "number") {
-    line += "  \u00b7  " + Math.round(r.entryRtt) + " ms"
+  var line
+  var rtt = null
+  if (which === "entry") {
+    line = "Entry " + pretty(e)
+    rtt = r.entryRtt
+  } else if (which === "exit") {
+    line = "Exit " + pretty(x)
+    rtt = r.exitRtt
+  } else {
+    line = pretty(e) + "  \u2192  " + pretty(x)
+    rtt = r.entryRtt
+  }
+  if (r.measured === true && typeof rtt === "number") {
+    line += "  \u00b7  " + Math.round(rtt) + " ms"
   }
   return line
 }
@@ -1116,6 +1192,7 @@ if (typeof module !== "undefined" && module.exports) {
     liveRoute: liveRoute,
     liveRouteSummary: liveRouteSummary,
     routeMismatchNotice: routeMismatchNotice,
+    selectionSatisfied: selectionSatisfied,
     countryForGatewayId: countryForGatewayId,
     gatewaySummary: gatewaySummary,
     parseStatus: parseStatus,
@@ -1143,6 +1220,7 @@ if (typeof module !== "undefined" && module.exports) {
     probeSkipReason: probeSkipReason,
     countryDistanceKm: countryDistanceKm,
     fastestSummary: fastestSummary,
+    chooseFastestExit: chooseFastestExit,
     homeCountryNotice: homeCountryNotice
   }
 }

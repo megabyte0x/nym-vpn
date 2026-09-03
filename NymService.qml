@@ -63,7 +63,8 @@ Singleton {
   // cause (constraint not yet applied, daemon fallback, a stray selection).
   readonly property string routeMismatch: Model.routeMismatchNotice(
     { entry: svc.entrySelection, exit: svc.exitSelection },
-    Model.liveRoute(svc.statusRaw, svc.entryHosts))
+    Model.liveRoute(svc.statusRaw, svc.entryHosts),
+    svc.localCountry)
   property string notice: ""
 
   // --- Fastest (measured) gateway selection --------------------------------
@@ -74,6 +75,10 @@ Singleton {
   property bool fastestBusy: false
   // "entry" | "exit" | "both" -- which hop(s) the in-flight resolve will apply.
   property string fastestRole: ""
+  // The hop(s) the LAST resolve applied. "Re-test" repeats exactly that, so it
+  // cannot silently overwrite a hop the user set to something else (a Re-test
+  // that always did "both" replaced an explicit Auto entry with a pinned one).
+  property string lastFastestRole: ""
   // Last resolved route: { entry, exit, entryRtt, exitRtt, measured, ranked }.
   property var fastestResult: null
   // Set when the tunnel was up and a real measurement was impossible.
@@ -100,7 +105,17 @@ Singleton {
     svc.refreshStatus()
     svc.refreshConfig()
     svc.refreshCountries()
+    svc.ensureLocalCountry()
     if (svc.authFree) svc.refreshAccount()
+  }
+
+  // Detect the home country once, up front: the route-mismatch check needs it to
+  // judge an "Auto" selection (Auto excludes the user's own jurisdiction), not
+  // just the Fastest resolver. Offline and cheap -- timezone, then locale.
+  function ensureLocalCountry() {
+    if (svc.localCountryFetched || localeProc.running) return
+    localeProc.command = Model.localCountryCommand()
+    localeProc.running = true
   }
 
   function refreshStatus() {
@@ -178,6 +193,9 @@ Singleton {
 
     var command = Model.setGatewayCommand(role, value)
     if (!command) return
+    // Re-picking "Random" is an explicit request for a fresh roll, which no
+    // mismatch check can detect (any gateway satisfies random).
+    svc.forceReconnect = String(value).toLowerCase() === "random"
     // A gateway constraint only binds a NEWLY built tunnel. Without this the
     // daemon keeps routing over the old gateways, so the panel would report the
     // new selection (e.g. "Auto, excluding your country") while the user is
@@ -192,6 +210,9 @@ Singleton {
   function resolveFastest(role) {
     if (svc.fastestBusy || svc.actionBusy) return
     var r = String(role || "both")
+    // "repeat" = redo exactly what the last resolve applied (the Re-test
+    // button), so re-testing an exit-only Fastest never touches the entry.
+    if (r === "repeat") r = svc.lastFastestRole || "both"
     if (r !== "entry" && r !== "exit") r = "both"
     svc.fastestRole = r
     svc.fastestBusy = true
@@ -207,10 +228,7 @@ Singleton {
 
     // 1. Where is the user? (timezone, then locale -- both offline.)
     if (!svc.localCountryFetched) {
-      if (!localeProc.running) {
-        localeProc.command = Model.localCountryCommand()
-        localeProc.running = true
-      }
+      svc.ensureLocalCountry()
       return
     }
 
@@ -269,11 +287,8 @@ Singleton {
   // Apply a resolved route to the hop(s) the user asked for, then reconnect if
   // a tunnel is already up so the change actually takes effect.
   function fastestApply(pick) {
-    svc.fastestResult = pick
-    // Be explicit when the measured winner is the user's own country: that is
-    // precisely the privacy default Auto provides and Fastest gives up.
-    svc.fastestNotice = Model.homeCountryNotice(pick, svc.localCountry)
     var role = svc.fastestRole
+    svc.lastFastestRole = role
     svc.fastestBusy = false
     svc.fastestRole = ""
     svc.fastestPlan = null
@@ -283,6 +298,36 @@ Singleton {
       return
     }
 
+    // Build EXACTLY what will be applied, then report that. Previously the
+    // panel described the raw pick while a different route was applied (it
+    // announced "Exit Malaysia" while pinning an Indian exit).
+    var home = svc.localCountry
+    var entryCc = svc.entrySelection      // "auto"/"random"/"IN"/""
+    var applied = {
+      entry: "", exit: "", entryId: "", exitId: "",
+      entryRtt: null, exitRtt: null,
+      measured: pick.measured, ranked: pick.ranked || []
+    }
+
+    if (role === "entry" || role === "both") {
+      applied.entry = pick.entry
+      applied.entryId = pick.entryId
+      applied.entryRtt = pick.entryRtt
+    }
+    if (role === "exit" || role === "both") {
+      // Keep the exit out of the entry's country and out of the user's own
+      // country -- an exit in your own jurisdiction defeats the tunnel.
+      var avoid = [home]
+      avoid.push(role === "both" ? applied.entry : entryCc)
+      var chosen = Model.chooseFastestExit(pick, avoid)
+      applied.exit = chosen.cc
+      applied.exitId = chosen.id
+      applied.exitRtt = chosen.rtt
+    }
+
+    svc.fastestResult = applied
+    svc.fastestNotice = Model.homeCountryNotice(applied, home, role)
+
     // Pin the exact measured gateway when we have one; a bare country lets the
     // daemon re-roll inside that country by its own latency-blind score (which
     // measured 390ms / 2.5 MB/s on an SG node while a probed SG node answered
@@ -290,26 +335,13 @@ Singleton {
     // the more robust country constraint instead.
     var command = null
     if (role === "entry") {
-      command = Model.setGatewaysCommand({ entry: pick.entry, entryId: pick.entryId })
+      command = Model.setGatewaysCommand({ entry: applied.entry, entryId: applied.entryId })
     } else if (role === "exit") {
-      // Keep the hops in different countries when we can: take the best
-      // measured country that is not already the entry.
-      var entryCc = svc.entrySelection
-      var exitCc = pick.exit
-      var exitId = pick.exitId
-      var ranked = pick.ranked || []
-      for (var i = 0; i < ranked.length; i++) {
-        if (ranked[i].cc !== entryCc) {
-          exitCc = ranked[i].cc
-          exitId = ranked[i].id || ""
-          break
-        }
-      }
-      command = Model.setGatewaysCommand({ exit: exitCc, exitId: exitId })
+      command = Model.setGatewaysCommand({ exit: applied.exit, exitId: applied.exitId })
     } else {
       command = Model.setGatewaysCommand({
-        entry: pick.entry, entryId: pick.entryId,
-        exit: pick.exit, exitId: pick.exitId
+        entry: applied.entry, entryId: applied.entryId,
+        exit: applied.exit, exitId: applied.exitId
       })
     }
     if (!command) {
@@ -322,6 +354,8 @@ Singleton {
 
   // Set when a gateway change needs the tunnel rebuilt to take effect.
   property bool pendingReconnect: false
+  // Rebuild even when the live route already satisfies the selection.
+  property bool forceReconnect: false
 
   function forget() {
     svc.runAction(Model.accountForgetCommand())
@@ -490,8 +524,17 @@ Singleton {
     id: reconnectTimer
     interval: 1500
     onTriggered: {
-      if (svc.status.state !== "connected") return
-      if (svc.routeMismatch === "") return   // already on the selected region
+      if (svc.status.state !== "connected") {
+        svc.forceReconnect = false
+        return
+      }
+      var force = svc.forceReconnect
+      svc.forceReconnect = false
+      // Rebuild when the live route does not satisfy the selection. Note that
+      // "Auto" is NOT satisfied by a gateway in the user's own country, so
+      // switching to Auto while connected does rebuild -- without that, the
+      // panel showed Auto while the tunnel stayed on the previous gateway.
+      if (!force && svc.routeMismatch === "") return
       svc.runAction(Model.reconnectCommand())
     }
   }
