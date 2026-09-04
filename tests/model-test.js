@@ -1004,4 +1004,114 @@ test("fastestSummary says so when the pick was not measured", () => {
   assert.strictEqual(M.fastestSummary(null), "")
 })
 
+// --- QML markup-injection guard (marketplace review, issue #4465) ---
+//
+// QML Text defaults to Text.AutoText, which sniffs the string and renders it
+// as rich text when it looks like markup. Several Text elements display data
+// that originates in another process (nym-vpnc/nym-vpnd output, parsed model
+// values), so a crafted daemon reason or gateway table could otherwise be
+// interpreted as HTML in the shell. Every Text whose binding references an
+// external-data source must therefore declare `textFormat: Text.PlainText`.
+//
+// This is a static scan of the QML source: it extracts each `Text {` block,
+// finds its `text:` binding (single-line, multi-line expression, or `{...}`
+// block form), and fails if the binding mentions an external source while the
+// block lacks the PlainText declaration.
+
+const EXTERNAL_SOURCES = /\b(status\.|NymService\.|Model\.|notice\b|fastest\w*|routeMismatch|setupCommand)\b/
+
+function extractBlocks(source, elementName) {
+  // Return the body of every `<elementName> {` element declaration.
+  const blocks = []
+  const re = new RegExp("(^|[\\s])" + elementName + "\\s*\\{", "g")
+  let m
+  while ((m = re.exec(source)) !== null) {
+    let depth = 1
+    let i = m.index + m[0].length
+    const start = i
+    while (i < source.length && depth > 0) {
+      const ch = source[i]
+      if (ch === "{") depth++
+      else if (ch === "}") depth--
+      i++
+    }
+    blocks.push({ body: source.slice(start, i - 1), offset: start })
+  }
+  return blocks
+}
+
+function extractTextBinding(body) {
+  // The `text:` property of the block itself (not textFormat:, not a child's
+  // property -- children here never carry a text property of their own).
+  const m = body.match(/(^|\n)(\s*)text:\s*/)
+  if (!m) return null
+  let i = m.index + m[0].length
+  if (body[i] === "{") {
+    // Block binding: capture the balanced braces.
+    let depth = 1
+    const start = i + 1
+    i++
+    while (i < body.length && depth > 0) {
+      if (body[i] === "{") depth++
+      else if (body[i] === "}") depth--
+      i++
+    }
+    return body.slice(start, i - 1)
+  }
+  // Expression binding: consume lines until the next property or closing
+  // brace at any indentation (a continuation line starts with an operator or
+  // deeper content, never `identifier:` or `}`).
+  const lines = body.slice(i).split("\n")
+  const taken = [lines[0]]
+  for (let n = 1; n < lines.length; n++) {
+    const line = lines[n]
+    if (/^\s*\}/.test(line)) break
+    if (/^\s*[A-Za-z_][\w.]*\s*:/.test(line) && !/^\s*\?|^\s*:/.test(line.trim())) {
+      // `? "..."` / `: "..."` ternary continuations keep the expression going;
+      // anything else shaped like `name:` is the next property.
+      if (!/^\s*[?:]/.test(line)) break
+    }
+    taken.push(line)
+  }
+  return taken.join("\n")
+}
+
+test("every QML Text bound to external-process data declares Text.PlainText", () => {
+  const qmlFiles = fs.readdirSync(path.join(__dirname, ".."))
+    .filter((f) => f.endsWith(".qml"))
+  assert.ok(qmlFiles.includes("Panel.qml"), "Panel.qml present")
+  const offenders = []
+  let externalBound = 0
+  for (const file of qmlFiles) {
+    const source = fs.readFileSync(path.join(__dirname, "..", file), "utf8")
+    for (const block of extractBlocks(source, "Text")) {
+      const binding = extractTextBinding(block.body)
+      if (!binding) continue
+      if (!EXTERNAL_SOURCES.test(binding)) continue
+      externalBound++
+      if (!/textFormat:\s*Text\.PlainText/.test(block.body)) {
+        const line = source.slice(0, block.offset).split("\n").length
+        offenders.push(file + ":" + line + " -> text: " + binding.trim().split("\n")[0])
+      }
+    }
+  }
+  assert.deepStrictEqual(offenders, [],
+    "Text elements rendering external data without textFormat: Text.PlainText:\n" +
+    offenders.join("\n"))
+  // The scan must actually be seeing the panel's external bindings -- if this
+  // drops to zero the extractor broke, not the panel.
+  assert.ok(externalBound >= 11,
+    "expected at least 11 externally-bound Text elements, saw " + externalBound)
+})
+
+test("the flagged status label and detail bindings are PlainText (issue #4465)", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "Panel.qml"), "utf8")
+  for (const marker of ["text: root.status.label", "text: root.status.detail"]) {
+    const found = extractBlocks(source, "Text").some((block) =>
+      block.body.includes(marker) &&
+      /textFormat:\s*Text\.PlainText/.test(block.body))
+    assert.ok(found, marker + " must sit in a Text block with textFormat: Text.PlainText")
+  }
+})
+
 console.log("\n" + passed + " tests passed")

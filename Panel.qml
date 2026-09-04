@@ -153,6 +153,7 @@ Panel {
 
           Text {
             anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
             text: Model.stateGlyph(root.status.state)
             color: root.colorForRole(Model.stateColorRole(root.status.state))
             font.family: root.contentFontFamily
@@ -175,6 +176,7 @@ Panel {
             Text {
               width: parent.width
               elide: Text.ElideRight
+              textFormat: Text.PlainText
               text: root.status.label
               color: root.colorForRole(Model.stateColorRole(root.status.state))
               font.family: root.contentFontFamily
@@ -194,6 +196,7 @@ Panel {
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
             text: root.status.detail
             color: Color.urgent
             font.family: root.contentFontFamily
@@ -204,6 +207,7 @@ Panel {
             width: parent.width
             wrapMode: Text.WordWrap
             visible: text !== ""
+            textFormat: Text.PlainText
             text: Model.errorHint(root.status.detail)
             color: Color.muted
             font.family: root.contentFontFamily
@@ -303,6 +307,7 @@ Panel {
             Text {
               id: connectLabel
               anchors.centerIn: parent
+              textFormat: Text.PlainText
               text: root.status.state === "connecting" ? "Connecting…" : "Connect"
               color: Color.accent
               font.family: root.contentFontFamily
@@ -331,6 +336,7 @@ Panel {
             Text {
               id: disconnectLabel
               anchors.centerIn: parent
+              textFormat: Text.PlainText
               text: root.status.state === "disconnecting" ? "Disconnecting…" : "Disconnect"
               color: Color.urgent
               font.family: root.contentFontFamily
@@ -489,6 +495,7 @@ Panel {
           Text {
             width: parent.width
             elide: Text.ElideRight
+            textFormat: Text.PlainText
             text: "Servers  ·  " + Nym.NymService.routeSummary
             color: Color.muted
             font.family: root.contentFontFamily
@@ -547,6 +554,7 @@ Panel {
 
             Text {
               id: fastestLine
+              textFormat: Text.PlainText
               anchors.left: parent.left
               anchors.right: retestLabel.left
               anchors.rightMargin: Style.spacing.sm
@@ -596,6 +604,7 @@ Panel {
             width: parent.width
             wrapMode: Text.WordWrap
             visible: Nym.NymService.routeMismatch !== ""
+            textFormat: Text.PlainText
             text: "⚠  " + Nym.NymService.routeMismatch
             color: Color.urgent
             font.family: root.contentFontFamily
@@ -609,6 +618,7 @@ Panel {
             width: parent.width
             wrapMode: Text.WordWrap
             visible: root.fastestNotice !== ""
+            textFormat: Text.PlainText
             text: root.fastestNotice
             color: Color.muted
             font.family: root.contentFontFamily
@@ -732,6 +742,7 @@ Panel {
           width: parent.width
           wrapMode: Text.WordWrap
           visible: root.notice !== ""
+          textFormat: Text.PlainText
           text: root.notice
           color: Color.muted
           font.family: root.contentFontFamily
